@@ -1,0 +1,21 @@
+# Local Postgres for `make test-db` and the example server. Port 5433 on the host, so it can run
+# next to an application's own Postgres on 5432.
+services:
+  postgres:
+    image: postgres:18.1
+    ports:
+      - "127.0.0.1:5433:5432"
+    environment:
+      POSTGRES_DB: rustauth
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d rustauth"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:

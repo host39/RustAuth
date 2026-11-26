@@ -1,0 +1,25 @@
+{
+  "name": "@rustauth/contracts",
+  "version": "0.1.0",
+  "description": "RustAuth HTTP contracts: TypeScript types generated from the Rust DTOs, plus Zod schemas.",
+  "private": true,
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./ts/index.ts"
+  },
+  "imports": {
+    "#generated/*": "./ts/generated/*.ts"
+  },
+  "scripts": {
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@tsconfig/node22": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "name": "lib-rustauth",
+  "version": "0.1.0",
+  "private": true,
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "check": "biome check --changed",
+    "check:all": "biome check .",
+    "check:fix": "biome check --changed --write",
+    "check:fix:all": "biome check --write .",
+    "check:markdown": "markdownlint \"**/*.md\"",
+    "check:markdown:fix": "markdownlint \"**/*.md\" --fix",
+    "type-check": "pnpm -r --parallel type-check",
+    "test": "pnpm -r --if-present test",
+    "db:start": "docker compose up -d --wait",
+    "db:stop": "docker compose down",
+    "db:reset": "docker compose down -v && docker compose up -d --wait",
+    "boundaries": "node scripts/boundaries.mjs",
+    "update": "pnpm up -r",
+    "update-latest": "pnpm up -r --latest"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "catalog:",
+    "@tsconfig/node22": "catalog:",
+    "@types/node": "catalog:",
+    "markdownlint-cli": "catalog:",
+    "typescript": "catalog:"
+  }
+}
