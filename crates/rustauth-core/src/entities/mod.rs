@@ -11,7 +11,7 @@ mod session;
 mod user;
 
 pub use crate::entities::credential::{NewPassword, PasswordCredential};
-pub use crate::entities::lockout::Lockout;
+pub use crate::entities::lockout::{Lockout, Reservation, Subject};
 pub use crate::entities::principal::Principal;
 pub use crate::entities::session::Session;
 pub use crate::entities::user::{NewUser, RegisterPolicy, User, UserPatch};

@@ -93,7 +93,8 @@ pub mod contracts {
 pub mod ports {
     pub use rustauth_core::{
         Clock, NewPassword, NewUser, PasswordCredential, PasswordHasher, Ports, RegisterPolicy,
-        SessionRepository, SystemClock, TokenHash, TokenIssuer, UserPatch, UserRepository,
+        Reservation, SessionRepository, Subject, SystemClock, TokenHash, TokenIssuer, UserPatch,
+        UserRepository,
     };
     pub use rustauth_crypto::{Argon2Hasher, RandomTokens};
 }

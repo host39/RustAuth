@@ -41,6 +41,7 @@ async fn creates_the_auth_schema_and_tracks_it_there(pool: PgPool) {
         tables(&pool).await,
         [
             "auth._sqlx_migrations",
+            "auth.login_failures",
             "auth.password_credentials",
             "auth.sessions",
             "auth.users",
@@ -114,7 +115,7 @@ async fn down_migrations_revert_to_an_empty_schema(pool: PgPool) {
     assert_eq!(tables(&pool).await, ["auth._sqlx_migrations"]);
     assert!(applied(&pool, "auth._sqlx_migrations").await.is_empty());
     migrate(&pool).await.expect("migrated again");
-    assert_eq!(tables(&pool).await.len(), 4);
+    assert_eq!(tables(&pool).await.len(), 5);
 }
 
 #[sqlx::test(migrator = "rustauth_postgres::MIGRATOR")]

@@ -1,15 +1,16 @@
 //! `SqlxUserRepository`: accounts, password credentials, and lockout state in `auth.users` and
-//! `auth.password_credentials`.
+//! `auth.password_credentials`, plus the lockout state of usernames without an account in
+//! `auth.login_failures`.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use rustauth_core::{
     AuthError, AuthResult, Lockout, NewPassword, NewUser, Page, PasswordCredential, RegisterPolicy,
-    Role, User, UserId, UserPatch, UserRepository, Username,
+    Reservation, Role, Subject, User, UserId, UserPatch, UserRepository, Username,
 };
 use sqlx::{PgConnection, PgPool};
 
-use crate::repositories::rows::{AccountRow, LockoutRow, UserRow, user_columns};
+use crate::repositories::rows::{AccountRow, LockoutRow, UserRow, lockout_columns, user_columns};
 use crate::repositories::shared::{advisory_lock, count, internal, orphaned, violates};
 
 /// The unique index on `lower(username)`.
@@ -19,7 +20,7 @@ const USERNAME_INDEX: &str = "users_username_key";
 ///
 /// Self-registration and every change the last-administrator guard checks (`update`, `delete`)
 /// run in one transaction that first takes a fixed advisory lock, so these decisions are
-/// serialized across connections and processes. Lockout changes are single atomic statements.
+/// serialized across connections and processes. Lockout steps are single atomic statements.
 #[derive(Clone, Debug)]
 pub struct SqlxUserRepository {
     pool: PgPool,
@@ -85,6 +86,28 @@ impl SqlxUserRepository {
         .await
         .map_err(internal(key))?;
         row.map(User::try_from).transpose()
+    }
+
+    /// The stored lockout of `subject`, `None` when there is none.
+    async fn lockout(&self, subject: &Subject, key: &'static str) -> AuthResult<Option<Lockout>> {
+        let row: Option<LockoutRow> = match subject {
+            Subject::User(id) => sqlx::query_as(concat!(
+                "SELECT ",
+                lockout_columns!(),
+                " FROM auth.users WHERE id = $1"
+            ))
+            .bind(id.as_uuid()),
+            Subject::Name(name) => sqlx::query_as(concat!(
+                "SELECT ",
+                lockout_columns!(),
+                " FROM auth.login_failures WHERE username = $1"
+            ))
+            .bind(name.canonical()),
+        }
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(internal(key))?;
+        row.map(Lockout::try_from).transpose()
     }
 
     /// Enabled administrators other than `id`, for [`User::ensure_admin_remains`].
@@ -264,51 +287,134 @@ impl UserRepository for SqlxUserRepository {
         }
     }
 
-    /// The same step as [`Lockout::fail`] in one `UPDATE ... RETURNING`: the right-hand sides
-    /// read the row as it was before the update, and concurrent failures queue on the row lock.
-    async fn record_failure(
+    /// [`Lockout::reserve`] in one statement: an `UPDATE` of the account, or an upsert of the
+    /// username's row in `auth.login_failures`, whose `WHERE` repeats the refusal rule.
+    /// Concurrent attempts queue on the row lock and each one re-checks the rule against the
+    /// row as the previous one left it, so no more checks pass than the threshold allows.
+    async fn reserve(
         &self,
-        user: UserId,
+        subject: &Subject,
         at: DateTime<Utc>,
         since: DateTime<Utc>,
-    ) -> AuthResult<Lockout> {
-        let row: Option<LockoutRow> = sqlx::query_as(concat!(
-            "UPDATE auth.users SET failed_login_count = CASE ",
-            "WHEN last_failed_login_at IS NULL OR last_failed_login_at < $3 THEN 1 ",
-            "ELSE failed_login_count + 1 END, ",
-            "last_failed_login_at = $2 WHERE id = $1 ",
-            "RETURNING failed_login_count, lockout_count, last_failed_login_at, locked_until"
-        ))
-        .bind(user.as_uuid())
-        .bind(at)
-        .bind(since)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(internal("rustauth.users.record-failure.failed"))?;
-        row.map(Lockout::try_from)
-            .transpose()?
-            .ok_or_else(|| AuthError::not_found("User"))
+        threshold: u32,
+    ) -> AuthResult<Reservation> {
+        const KEY: &str = "rustauth.users.reserve.failed";
+        let threshold = i32::try_from(threshold).unwrap_or(i32::MAX);
+        let granted: Option<LockoutRow> =
+            match subject {
+                Subject::User(id) => {
+                    sqlx::query_as(concat!(
+                        "UPDATE auth.users SET failed_login_count = CASE ",
+                        "WHEN last_failed_login_at IS NULL OR last_failed_login_at < $3 THEN 1 ",
+                        "ELSE failed_login_count + 1 END, last_failed_login_at = $2 ",
+                        "WHERE id = $1 AND (locked_until IS NULL OR locked_until <= $2) ",
+                        "AND (last_failed_login_at IS NULL OR last_failed_login_at < $3 ",
+                        "OR failed_login_count < $4) RETURNING ",
+                        lockout_columns!()
+                    ))
+                    .bind(id.as_uuid())
+                    .bind(at)
+                    .bind(since)
+                    .bind(threshold)
+                    .fetch_optional(&self.pool)
+                    .await
+                }
+                Subject::Name(name) => sqlx::query_as(concat!(
+                    "INSERT INTO auth.login_failures AS f ",
+                    "(last_failed_login_at, failed_login_count, username) VALUES ($2, 1, $1) ",
+                    "ON CONFLICT (username) DO UPDATE SET failed_login_count = CASE ",
+                    "WHEN f.last_failed_login_at IS NULL OR f.last_failed_login_at < $3 THEN 1 ",
+                    "ELSE f.failed_login_count + 1 END, last_failed_login_at = $2 ",
+                    "WHERE (f.locked_until IS NULL OR f.locked_until <= $2) ",
+                    "AND (f.last_failed_login_at IS NULL OR f.last_failed_login_at < $3 ",
+                    "OR f.failed_login_count < $4) RETURNING ",
+                    lockout_columns!()
+                ))
+                .bind(name.canonical())
+                .bind(at)
+                .bind(since)
+                .bind(threshold)
+                .fetch_optional(&self.pool)
+                .await,
+            }
+            .map_err(internal(KEY))?;
+        if let Some(row) = granted {
+            return Ok(Reservation::Granted(Lockout::try_from(row)?));
+        }
+        match (self.lockout(subject, KEY).await?, subject) {
+            (Some(stored), _) => Ok(Reservation::Refused(stored)),
+            (None, Subject::User(_)) => Err(AuthError::not_found("User")),
+            // Only a refused upsert returns no row, and it leaves the row in place.
+            (None, Subject::Name(_)) => Ok(Reservation::Refused(Lockout::default())),
+        }
     }
 
-    /// The same step as [`Lockout::lock`], applied only while `lockout_count` still equals
-    /// `lockouts`. `false` when a concurrent failure locked the account first, or when the
-    /// account no longer exists.
-    async fn lock(&self, user: UserId, until: DateTime<Utc>, lockouts: u32) -> AuthResult<bool> {
-        let Ok(lockouts) = i32::try_from(lockouts) else {
-            // The stored counter is an `integer`, so it cannot hold this value.
+    /// [`Lockout::lock`], applied only while the row still [`Lockout::holds`] `seen`: the same
+    /// lockout counter and at least the failures `seen` counted.
+    async fn lock(
+        &self,
+        subject: &Subject,
+        seen: Lockout,
+        until: DateTime<Utc>,
+    ) -> AuthResult<bool> {
+        let (Ok(lockouts), Ok(failures)) = (
+            i32::try_from(seen.lockouts),
+            i32::try_from(seen.failed_count),
+        ) else {
+            // The stored counters are `integer`s, so they cannot hold these values.
             return Ok(false);
         };
-        let done = sqlx::query(concat!(
-            "UPDATE auth.users SET failed_login_count = 0, lockout_count = lockout_count + 1, ",
-            "locked_until = $2 WHERE id = $1 AND lockout_count = $3"
-        ))
-        .bind(user.as_uuid())
+        let done = match subject {
+            Subject::User(id) => sqlx::query(concat!(
+                "UPDATE auth.users SET failed_login_count = 0, ",
+                "lockout_count = lockout_count + 1, locked_until = $2 ",
+                "WHERE id = $1 AND lockout_count = $3 AND failed_login_count >= $4"
+            ))
+            .bind(id.as_uuid()),
+            Subject::Name(name) => sqlx::query(concat!(
+                "UPDATE auth.login_failures SET failed_login_count = 0, ",
+                "lockout_count = lockout_count + 1, locked_until = $2 ",
+                "WHERE username = $1 AND lockout_count = $3 AND failed_login_count >= $4"
+            ))
+            .bind(name.canonical()),
+        }
         .bind(until)
         .bind(lockouts)
+        .bind(failures)
         .execute(&self.pool)
         .await
         .map_err(internal("rustauth.users.lock.failed"))?;
         Ok(done.rows_affected() > 0)
+    }
+
+    /// Resets the account's columns, or deletes the username's row, in one statement that
+    /// leaves a locked subject alone.
+    async fn clear(&self, subject: &Subject, at: DateTime<Utc>) -> AuthResult<Option<Lockout>> {
+        const KEY: &str = "rustauth.users.clear.failed";
+        let done = match subject {
+            Subject::User(id) => sqlx::query(concat!(
+                "UPDATE auth.users SET failed_login_count = 0, lockout_count = 0, ",
+                "last_failed_login_at = NULL, locked_until = NULL ",
+                "WHERE id = $1 AND (locked_until IS NULL OR locked_until <= $2)"
+            ))
+            .bind(id.as_uuid()),
+            Subject::Name(name) => sqlx::query(concat!(
+                "DELETE FROM auth.login_failures ",
+                "WHERE username = $1 AND (locked_until IS NULL OR locked_until <= $2)"
+            ))
+            .bind(name.canonical()),
+        }
+        .bind(at)
+        .execute(&self.pool)
+        .await
+        .map_err(internal(KEY))?;
+        if done.rows_affected() > 0 {
+            return Ok(None);
+        }
+        match (self.lockout(subject, KEY).await?, subject) {
+            (None, Subject::User(_)) => Err(AuthError::not_found("User")),
+            (stored, _) => Ok(stored),
+        }
     }
 
     async fn unlock(&self, user: UserId) -> AuthResult<()> {
@@ -324,5 +430,17 @@ impl UserRepository for SqlxUserRepository {
             return Err(AuthError::not_found("User"));
         }
         Ok(())
+    }
+
+    async fn prune(&self, since: DateTime<Utc>) -> AuthResult<u64> {
+        let done = sqlx::query(concat!(
+            "DELETE FROM auth.login_failures WHERE lockout_count = 0 AND locked_until IS NULL ",
+            "AND (last_failed_login_at IS NULL OR last_failed_login_at < $1)"
+        ))
+        .bind(since)
+        .execute(&self.pool)
+        .await
+        .map_err(internal("rustauth.users.prune.failed"))?;
+        Ok(done.rows_affected())
     }
 }

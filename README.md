@@ -65,7 +65,7 @@ async fn delete_widget(user: AuthUser) -> Result<StatusCode, AppError> {
 - `AuthUser` used on a route without a guard answers `500` and logs `rustauth.guard.missing`, so a wiring mistake shows at once.
 - `build()` refuses to start when `auth` migrations are pending ("Auth schema is out of date: run migrations") or when the database is newer than the library (unless `allow_newer_schema(true)`).
 - While no account exists and no `AUTH_SETUP_TOKEN` is set, `build()` logs a generated setup token once (`rustauth.setup.token-issued`). Set `AUTH_SETUP_TOKEN` when several instances run.
-- `auth.service()` and `auth.admin()` are the core services, for calls from your own code (for example `auth.service().purge()` to delete expired sessions).
+- `auth.service()` and `auth.admin()` are the core services, for calls from your own code (for example `auth.service().purge()` to delete expired sessions and stale sign-in failure records).
 
 Your own tables may reference `auth.users (id)`, for example `user_id uuid NOT NULL REFERENCES auth.users (id) ON DELETE CASCADE`. Keep all rustauth usage in one adapter module of your application, which maps `AuthError` into your error type and `AuthUser` into your own actor type; an upgrade then touches one module.
 

@@ -4,7 +4,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
 use crate::entities::{
-    Lockout, NewPassword, NewUser, PasswordCredential, RegisterPolicy, User, UserPatch,
+    Lockout, NewPassword, NewUser, PasswordCredential, RegisterPolicy, Reservation, Subject, User,
+    UserPatch,
 };
 use crate::error::AuthResult;
 use crate::values::{Page, UserId, Username};
@@ -54,22 +55,40 @@ pub trait UserRepository: Send + Sync {
     /// Stores (or replaces) the password hash. `NotFound` when the user is missing.
     async fn set_password(&self, user: UserId, hash: String, at: DateTime<Utc>) -> AuthResult<()>;
 
-    /// Records a wrong password atomically (one `UPDATE ... RETURNING`, so concurrent attempts
-    /// cannot skip the count) with the same effect as [`Lockout::fail`], and returns the new
-    /// state. `since` is the start of the failure window. `NotFound` when missing.
-    async fn record_failure(
+    /// Starts a password check for `subject` at `at`: applies [`Lockout::reserve`] in one
+    /// atomic step (concurrent attempts queue on it, so they cannot all pass the threshold
+    /// check before any of them is counted) and returns its outcome. `since` is the start of the
+    /// failure window. A [`Subject::Name`] without stored state starts from the default state.
+    /// `NotFound` for a missing [`Subject::User`].
+    async fn reserve(
         &self,
-        user: UserId,
+        subject: &Subject,
         at: DateTime<Utc>,
         since: DateTime<Utc>,
-    ) -> AuthResult<Lockout>;
+        threshold: u32,
+    ) -> AuthResult<Reservation>;
 
-    /// Applies [`Lockout::lock`] with `until`, but only if the stored lockout counter still
-    /// equals `lockouts` (the value the caller decided on), so two concurrent failures lock once.
-    /// Returns whether this call locked the account.
-    async fn lock(&self, user: UserId, until: DateTime<Utc>, lockouts: u32) -> AuthResult<bool>;
+    /// Applies [`Lockout::lock`] with `until`, but only while the stored state still
+    /// [`Lockout::holds`] `seen` (what the caller's reservation returned), so concurrent
+    /// failures lock once and a correct password that finished first is not undone. Returns
+    /// whether this call locked; `false` for a missing subject.
+    async fn lock(
+        &self,
+        subject: &Subject,
+        seen: Lockout,
+        until: DateTime<Utc>,
+    ) -> AuthResult<bool>;
 
-    /// Resets the lockout state (after a successful sign-in, an administrator unlock, or an
-    /// administrator password reset).
+    /// Resets the state after a correct password, unless the subject is locked at `at` (a lock
+    /// that a concurrent failure set during the check wins): then nothing changes and the stored
+    /// state is returned. `NotFound` for a missing [`Subject::User`].
+    async fn clear(&self, subject: &Subject, at: DateTime<Utc>) -> AuthResult<Option<Lockout>>;
+
+    /// Resets an account's state (an administrator unlock or password reset). `NotFound` when
+    /// the user is missing.
     async fn unlock(&self, user: UserId) -> AuthResult<()>;
+
+    /// Deletes the stored state of usernames without an account that [`Lockout::is_stale`] at
+    /// the window start `since`; returns how many.
+    async fn prune(&self, since: DateTime<Utc>) -> AuthResult<u64>;
 }

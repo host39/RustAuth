@@ -141,10 +141,13 @@ trait UserRepository {
     async fn delete(&self, id: UserId) -> Result<bool>;  // same guard
     async fn count(&self) -> Result<u64>;
     async fn set_password(&self, user: UserId, hash: String, at: DateTime<Utc>) -> Result<()>;
-    // Lockout state (see Brute-Force Protection):
-    async fn record_failure(&self, user: UserId, at: DateTime<Utc>, since: DateTime<Utc>) -> Result<Lockout>; // one UPDATE ... RETURNING
-    async fn lock(&self, user: UserId, until: DateTime<Utc>, lockouts: u32) -> Result<bool>; // only if `lockouts` is unchanged
+    // Lockout state (see Brute-Force Protection). `Subject` is an account (`User(UserId)`) or a
+    // username without one (`Name(Username)`, stored by its lowercase form).
+    async fn reserve(&self, subject: &Subject, at, since, threshold: u32) -> Result<Reservation>; // one atomic statement
+    async fn lock(&self, subject: &Subject, seen: Lockout, until) -> Result<bool>; // only while the state still holds `seen`
+    async fn clear(&self, subject: &Subject, at) -> Result<Option<Lockout>>; // unless locked at `at`
     async fn unlock(&self, user: UserId) -> Result<()>;
+    async fn prune(&self, since) -> Result<u64>; // stale states of usernames without an account
 }
 trait SessionRepository {
     async fn insert(&self, session: &Session) -> Result<()>;
@@ -159,13 +162,13 @@ trait SessionRepository {
 
 `RegisterPolicy` holds what the service decided before the lock (`registration_open`, the setup token check result); the repository repeats the count check inside the lock and returns `SetupRequired` or `RegistrationClosed` when the state changed.
 
-The rules the repositories apply inside their transactions are defined in core so every implementation shares them: `RegisterPolicy::decide(count)` (first administrator), `User::ensure_admin_remains(next, others)` (last-administrator guard), and `Lockout::fail` / `Lockout::lock` (the lockout transitions). The services receive their adapters bundled as `Ports`.
+The rules the repositories apply inside their transactions are defined in core so every implementation shares them: `RegisterPolicy::decide(count)` (first administrator), `User::ensure_admin_remains(next, others)` (last-administrator guard), and `Lockout::reserve` / `Lockout::lock` / `Lockout::holds` / `Lockout::is_stale` (the lockout steps). The services receive their adapters bundled as `Ports`.
 
 ### Services
 
 | Service | Operations |
 | --- | --- |
-| `AuthService` | `setup_status()` (needs setup, registration open), `register(input, setup_token, client)`, `login(username, password, client)`, `logout(principal)`, `verify(bearer)` (hash, load session plus user, reject expired, disabled, or deleted; slide `last_used_at` at most hourly), `me`, `update_profile(display_name)`, `change_password(current, new, client)` (revokes other sessions; a wrong current password counts toward the lockout and fails as a validation error on `current`), `sessions`, `revoke(session_id)`, `revoke_others`, `purge` (deletes expired sessions) |
+| `AuthService` | `setup_status()` (needs setup, registration open), `register(input, setup_token, client)`, `login(username, password, client)`, `logout(principal)`, `verify(bearer)` (hash, load session plus user, reject expired, disabled, or deleted; slide `last_used_at` at most hourly), `me`, `update_profile(display_name)`, `change_password(current, new, client)` (revokes other sessions; a wrong current password counts toward the lockout and fails as a validation error on `current`), `sessions`, `revoke(session_id)`, `revoke_others`, `purge` (deletes expired sessions and the failure records of unknown usernames that no longer count) |
 | `AdminService` | `list`, `get`, `create` (temporary password, role), `update` (role, disabled, display name, password reset; every change revokes that user's sessions), `unlock`, `delete`; refuses to remove, disable, or demote the last enabled administrator; caller must be `administrator` |
 | `LoginGuard` | Brute-force protection; see [Brute-Force Protection](#brute-force-protection) |
 | `RateLimiter` | In-memory token buckets per client IP for the public routes |
@@ -181,9 +184,11 @@ Rules:
 
 Three layers, all on by default:
 
-1. **Account lockout (persisted).** Each wrong password for an existing account increments `failed_count` atomically in the database (`UPDATE ... SET failed_count = failed_count + 1 ... RETURNING`, so concurrent attempts cannot skip the count). When it reaches `lockout_threshold` (default 5), the account is locked until `now + lockout_duration`. The duration doubles with each consecutive lockout (`lockouts` counter): 15 minutes, 30, 60, and so on, capped at `lockout_max` (default 24 hours). While locked, login is refused **before** the password is checked, so even the correct password fails, and no Argon2 work is spent. A successful login resets `failed_count` and `lockouts`. Failures older than the lockout window (15 minutes) start a new count. An administrator can unlock an account, and an administrator password reset also unlocks it. Existing sessions stay valid during a lockout (the lock is about guessing, not compromise).
-2. **Unknown usernames behave the same.** Attempts on usernames that do not exist are counted in memory with the same threshold and produce the same "locked" response, so lockout cannot be used to discover which usernames exist.
-3. **Per-IP limits (in memory).** Failed logins per client IP: 30 per 15 minutes. Requests to the public routes (`/auth/login`, `/auth/register`, `/auth/setup`) per client IP: 60 per minute (token bucket). Over either limit: `429` with `Retry-After`. These stop one client from locking out many accounts quickly.
+1. **Account lockout (persisted).** Every password check is reserved before it runs, in one atomic statement (`UPDATE ... WHERE <not locked and the window is not full> RETURNING`): the reservation counts the attempt as a failure and is refused while the account is locked or while `lockout_threshold` (default 5) failures, finished or still running, already fall inside the failure window (15 minutes). Concurrent attempts queue on the row, so a burst gets no more password checks than the threshold allows, and no Argon2 work is spent on a refused one. A wrong password whose reservation reached the threshold locks the account until `now + lockout_duration`, but only while the stored state still holds the failures it saw (so concurrent failures lock once, and a correct password that finished first is not undone). The duration doubles with each consecutive lockout (`lockouts` counter): 15 minutes, 30, 60, and so on, capped at `lockout_max` (default 24 hours). While locked, login is refused **before** the password is checked, so even the correct password fails. A correct password clears `failed_count` and `lockouts` with a statement that leaves a locked account alone, so a lock that a concurrent failure set during the check still wins. Failures older than the window start a new count. An administrator can unlock an account, and an administrator password reset also unlocks it. Existing sessions stay valid during a lockout (the lock is about guessing, not compromise).
+2. **Unknown usernames behave the same.** A username without an account goes through the same steps, with the same columns, in `auth.login_failures` (keyed by the lowercase username), so it locks after the same number of attempts on every instance and across restarts, with the same storage work per attempt, and lockout cannot be used to discover which usernames exist. Input that is not a valid username is never tracked by name (no account can have it, and it could only collide with a valid one); it still costs the dummy check. `AuthService::purge` deletes rows that no longer count: never locked and no failure inside the window. Rows of locked names stay, because their `lockouts` keep doubling the next lock exactly as an account's do.
+3. **Per-IP limits (in memory, per instance).** Failed logins per client IP: 30 per 15 minutes, counted from the moment an attempt is admitted (running attempts count) and given back when its password proves right or it is refused before a check. Requests to the public routes (`/auth/login`, `/auth/register`, `/auth/setup`) per client IP: 60 per minute (token bucket). Over either limit: `429` with `Retry-After`. These stop one client from locking out many accounts quickly.
+
+A sign-in therefore costs, for a known and an unknown username alike: one lookup, one reservation statement, one password check, and on the threshold failure one lock statement.
 
 The locked response is `429` with `Retry-After` and the code `ACCOUNT_LOCKED`, message "Too many failed sign-in attempts. Try again in N minutes." Logs: `rustauth.login.failed` (user id or `unknown`, client IP, count), `rustauth.login.locked` (user id, until), `rustauth.login.unlocked` (by administrator). Passwords and tokens are never logged.
 
@@ -217,7 +222,7 @@ The library takes a `PgPool`. It can be the application's pool (same database, s
 
 Column order follows the template's `postgres-column-alignment` rule. Constraints use `text` plus `CHECK` rather than enum types, so adding values later is a plain migration.
 
-The repositories (`SqlxUserRepository`, `SqlxSessionRepository`) use runtime-checked queries, never the `query!` macros, so building needs no database. `register`, `update`, and `delete` run in one transaction that first takes `pg_advisory_xact_lock` on a fixed key (the ASCII bytes of `rustauth`) and then locks the row, so the first-administrator decision and the last-administrator guard are serialized across connections and processes. `record_failure`, `lock`, and `unlock` are single statements. Driver errors become `AuthError::Internal` with `rustauth.<table>.<operation>.failed` keys; a violation of the `lower(username)` unique index becomes `UsernameTaken`. Client IPs are bound as text and cast to `inet` (read back with `host(ip)`), so the crate needs no sqlx `ipnet` feature.
+The repositories (`SqlxUserRepository`, `SqlxSessionRepository`) use runtime-checked queries, never the `query!` macros, so building needs no database. `register`, `update`, and `delete` run in one transaction that first takes `pg_advisory_xact_lock` on a fixed key (the ASCII bytes of `rustauth`) and then locks the row, so the first-administrator decision and the last-administrator guard are serialized across connections and processes. `reserve`, `lock`, `clear`, `unlock`, and `prune` are single statements (`reserve` and `clear` read the stored state afterwards only when they refuse). Driver errors become `AuthError::Internal` with `rustauth.<table>.<operation>.failed` keys; a violation of the `lower(username)` unique index becomes `UsernameTaken`. Client IPs are bound as text and cast to `inet` (read back with `host(ip)`), so the crate needs no sqlx `ipnet` feature.
 
 ### `auth.users`
 
@@ -244,6 +249,18 @@ The repositories (`SqlxUserRepository`, `SqlxSessionRepository`) use runtime-che
 | `hash` | `text` | not null; Argon2id PHC string |
 
 A separate table so that SSO-only users later need no password row.
+
+### `auth.login_failures`
+
+The lockout state of usernames without an account (see [Brute-Force Protection](#brute-force-protection)), with the same columns as on `auth.users`.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `last_failed_login_at` | `timestamptz` | null |
+| `locked_until` | `timestamptz` | null |
+| `failed_login_count` | `integer` | not null, default 0 |
+| `lockout_count` | `integer` | not null, default 0 |
+| `username` | `text` | primary key; the lowercase username |
 
 ### `auth.sessions`
 

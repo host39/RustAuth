@@ -20,7 +20,8 @@ tracing = { workspace = true }
 uuid = { workspace = true, features = ["v7"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt"] }
+# `sync` for the semaphore that holds password checks back in the concurrency tests.
+tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 
 [lints]
 workspace = true

@@ -21,16 +21,16 @@ pub mod values;
 
 pub use crate::config::{AuthConfig, AuthConfigBuilder, ConfigError};
 pub use crate::entities::{
-    Lockout, NewPassword, NewUser, PasswordCredential, Principal, RegisterPolicy, Session, User,
-    UserPatch,
+    Lockout, NewPassword, NewUser, PasswordCredential, Principal, RegisterPolicy, Reservation,
+    Session, Subject, User, UserPatch,
 };
 pub use crate::error::{AuthError, AuthResult, BoxError};
 pub use crate::ports::{
     Clock, PasswordHasher, Ports, SessionRepository, SystemClock, TokenIssuer, UserRepository,
 };
 pub use crate::services::{
-    AdminService, Attempt, AuthService, LoginGuard, NewAccount, RateLimiter, Registration,
-    SetupStatus, SignedIn, UserChanges,
+    AdminService, AuthService, LoginGuard, NewAccount, RateLimiter, Registration, SetupStatus,
+    SignedIn, Slot, UserChanges,
 };
 pub use crate::values::{
     Assurance, AuthMethod, ClientInfo, DisplayName, IpRange, Page, Password, Role, SessionId,

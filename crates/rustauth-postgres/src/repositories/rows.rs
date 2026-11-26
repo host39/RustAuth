@@ -22,6 +22,14 @@ macro_rules! user_columns {
 }
 pub(crate) use user_columns;
 
+/// The lockout columns, which `auth.users` and `auth.login_failures` share ([`LockoutRow`]).
+macro_rules! lockout_columns {
+    () => {
+        "failed_login_count, lockout_count, last_failed_login_at, locked_until"
+    };
+}
+pub(crate) use lockout_columns;
+
 /// The `auth.sessions` columns that [`SessionRow`] reads, for a query that names the table `s`.
 /// Aliased so they can sit next to [`user_columns`] in one joined row.
 macro_rules! session_columns {
@@ -41,7 +49,7 @@ fn session_error(error: impl Into<BoxError>) -> AuthError {
     AuthError::internal("rustauth.sessions.decode.failed", error)
 }
 
-/// The lockout columns of `auth.users`.
+/// The lockout columns of `auth.users` or `auth.login_failures` ([`lockout_columns`]).
 #[derive(sqlx::FromRow)]
 pub(crate) struct LockoutRow {
     failed_login_count: i32,

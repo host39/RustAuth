@@ -5,11 +5,12 @@ use chrono::{DateTime, Utc};
 
 use crate::config::AuthConfig;
 use crate::entities::{
-    NewPassword, NewUser, PasswordCredential, Principal, RegisterPolicy, Session, User, UserPatch,
+    NewPassword, NewUser, PasswordCredential, Principal, RegisterPolicy, Session, Subject, User,
+    UserPatch,
 };
 use crate::error::{AuthError, AuthResult};
 use crate::ports::Ports;
-use crate::services::guard::{Attempt, LoginGuard};
+use crate::services::guard::{LoginGuard, Slot};
 use crate::services::inputs::{Registration, SetupStatus, SignedIn};
 use crate::values::{
     Assurance, AuthMethod, ClientInfo, DisplayName, Password, Role, SessionId, TokenHash, UserId,
@@ -114,38 +115,73 @@ impl AuthService {
     }
 
     /// Signs in with a username and password. Unknown usernames verify against the dummy hash
-    /// and fail with the same error, and locked accounts are refused before the password is
-    /// checked. A disabled account fails with `Forbidden` only after the correct password.
+    /// and fail with the same error, and locked accounts (or unknown usernames) are refused
+    /// before the password is checked. A disabled account fails with `Forbidden` only after the
+    /// correct password.
     pub async fn login(
         &self,
         username: &str,
         password: String,
         client: &ClientInfo,
     ) -> AuthResult<SignedIn> {
-        self.guard.admit(client)?;
+        let slot = self.guard.admit(client)?;
         let password = Password::candidate(password);
-        let found = match Username::new(username) {
-            Ok(username) => self.ports.users.find(&username).await?,
-            // No account can have an invalid username; treat it like an unknown one.
-            Err(_) => None,
+        let Ok(username) = Username::new(username) else {
+            // No account can have an invalid username, so it is not tracked by name (where it
+            // could only collide with a valid one).
+            return Err(self.reject(&password, slot).await);
+        };
+        let found = self.ports.users.find(&username).await?;
+        let subject = match &found {
+            Some((user, _)) => Subject::User(user.id),
+            None => Subject::Name(username),
+        };
+        let seen = match self.guard.begin(&subject).await {
+            // Deleted since it was found: answer as for any unknown username.
+            Err(AuthError::NotFound { .. }) => return Err(self.reject(&password, slot).await),
+            other => other?,
         };
         let Some((user, credential)) = found else {
-            let attempt = Attempt::Unknown(username);
-            self.guard.check(&attempt)?;
             self.matches(&password, None).await?;
-            return Err(self.guard.fail(client, &attempt).await);
+            slot.keep();
+            return Err(self.guard.fail(client, &subject, seen).await);
         };
-        let attempt = Attempt::Known(&user);
-        self.guard.check(&attempt)?;
         if !self.matches(&password, credential.as_ref()).await? {
-            return Err(self.guard.fail(client, &attempt).await);
+            slot.keep();
+            return Err(self.guard.fail(client, &subject, seen).await);
         }
+        let signed = match self.complete(&subject, user, client).await {
+            // Deleted during the check: answer as for any unknown username.
+            Err(AuthError::NotFound { .. }) => Err(AuthError::InvalidCredentials),
+            other => other,
+        }?;
+        tracing::info!(user_id = %signed.user.id, ip = ?client.ip(), "rustauth.login.succeeded");
+        Ok(signed)
+    }
+
+    /// The rest of a sign-in after the correct password: clears the failures (a lock set during
+    /// the check wins), refuses a disabled account, and issues the session.
+    async fn complete(
+        &self,
+        subject: &Subject,
+        user: User,
+        client: &ClientInfo,
+    ) -> AuthResult<SignedIn> {
+        self.guard.succeed(subject).await?;
         if user.is_disabled() {
             return Err(AuthError::forbidden("This account is disabled."));
         }
-        self.guard.succeed(&user).await?;
-        tracing::info!(user_id = %user.id, ip = ?client.ip(), "rustauth.login.succeeded");
         self.start(user, client).await
+    }
+
+    /// Fails an attempt that has no lockout of its own: it still costs the dummy check (so the
+    /// time spent reveals nothing) and counts against the client IP.
+    async fn reject(&self, password: &Password, slot: Slot<'_>) -> AuthError {
+        if let Err(error) = self.matches(password, None).await {
+            return error;
+        }
+        slot.keep();
+        AuthError::InvalidCredentials
     }
 
     /// Revokes the caller's current session.
@@ -234,7 +270,7 @@ impl AuthService {
         new: Password,
         client: &ClientInfo,
     ) -> AuthResult<()> {
-        self.guard.admit(client)?;
+        let slot = self.guard.admit(client)?;
         let Some((user, credential)) = self
             .ports
             .users
@@ -244,18 +280,24 @@ impl AuthService {
         else {
             return Err(AuthError::Unauthorized);
         };
-        let attempt = Attempt::Known(&user);
-        self.guard.check(&attempt)?;
+        // A missing account means the caller's session is stale.
+        let stale = |error| match error {
+            AuthError::NotFound { .. } => AuthError::Unauthorized,
+            other => other,
+        };
+        let subject = Subject::User(user.id);
+        let seen = self.guard.begin(&subject).await.map_err(stale)?;
         let current = Password::candidate(current);
         if !self.matches(&current, credential.as_ref()).await? {
-            return Err(match self.guard.fail(client, &attempt).await {
+            slot.keep();
+            return Err(match self.guard.fail(client, &subject, seen).await {
                 AuthError::InvalidCredentials => {
                     AuthError::validation("current", "Current password is incorrect.")
                 }
                 other => other,
             });
         }
-        self.guard.succeed(&user).await?;
+        self.guard.succeed(&subject).await.map_err(stale)?;
         let now = self.ports.clock.now();
         let hash = self.ports.hasher.hash(&new).await?;
         self.ports.users.set_password(user.id, hash, now).await?;
@@ -305,10 +347,18 @@ impl AuthService {
         Ok(revoked)
     }
 
-    /// Deletes expired sessions; returns how many. Applications may call it periodically.
+    /// Deletes expired sessions and the sign-in failures of usernames without an account that
+    /// no longer count ([`crate::Lockout::is_stale`]); returns how many rows in all.
+    /// Applications call it periodically (hourly is plenty).
     pub async fn purge(&self) -> AuthResult<u64> {
         let now = self.ports.clock.now();
-        self.ports.sessions.purge_expired(now).await
+        let sessions = self.ports.sessions.purge_expired(now).await?;
+        let names = self
+            .ports
+            .users
+            .prune(now - self.config.failure_window())
+            .await?;
+        Ok(sessions + names)
     }
 
     /// Verifies `password` against the credential, or against the dummy hash when there is none
@@ -358,5 +408,7 @@ impl AuthService {
     }
 }
 
+#[cfg(test)]
+mod races;
 #[cfg(test)]
 mod tests;

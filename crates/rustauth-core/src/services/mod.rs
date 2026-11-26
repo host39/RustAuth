@@ -13,6 +13,6 @@ mod shared;
 
 pub use crate::services::admin::AdminService;
 pub use crate::services::auth::AuthService;
-pub use crate::services::guard::{Attempt, LoginGuard};
+pub use crate::services::guard::{LoginGuard, Slot};
 pub use crate::services::inputs::{NewAccount, Registration, SetupStatus, SignedIn, UserChanges};
 pub use crate::services::limiter::RateLimiter;

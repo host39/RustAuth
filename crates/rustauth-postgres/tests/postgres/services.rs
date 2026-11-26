@@ -163,3 +163,47 @@ async fn locks_accounts_in_the_database_until_unlocked(pool: PgPool) {
         .expect_err("last administrator");
     assert!(matches!(error, AuthError::LastAdministrator));
 }
+
+#[sqlx::test(migrator = "rustauth_postgres::MIGRATOR")]
+#[ignore = "requires Postgres: run make test-db"]
+async fn unknown_usernames_lock_like_accounts_across_instances(pool: PgPool) {
+    let fakes = Fakes::new();
+    // Two instances on one database, as in a deployment with several servers.
+    let (first, admin) = services(&pool, &fakes).await;
+    let (second, _) = services(&pool, &fakes).await;
+    let registration = Registration::new("admin", "Admin", PASSWORD.to_owned()).expect("valid");
+    let signed_in = first
+        .register(registration, Some(SETUP_TOKEN), &client())
+        .await
+        .expect("registered");
+    let actor = first
+        .verify(signed_in.token.expose())
+        .await
+        .expect("verified");
+    let account = NewAccount::new("bob", "Bob", PASSWORD.to_owned(), Role::User).expect("valid");
+    admin.create(&actor, account).await.expect("created");
+
+    // The threshold is three: alternate instances for every attempt.
+    for attempt in 1..=4 {
+        let service = if attempt % 2 == 1 { &first } else { &second };
+        let real = service
+            .login("bob", "wrong password".to_owned(), &client())
+            .await
+            .expect_err("wrong password");
+        let missing = service
+            .login("nobody", "wrong password".to_owned(), &client())
+            .await
+            .expect_err("unknown");
+        let expected = if attempt < 3 {
+            "INVALID_CREDENTIALS"
+        } else {
+            "ACCOUNT_LOCKED"
+        };
+        assert_eq!(
+            (real.code(), missing.code()),
+            (expected, expected),
+            "attempt {attempt}"
+        );
+        assert_eq!(real.retry_after_secs(), missing.retry_after_secs());
+    }
+}

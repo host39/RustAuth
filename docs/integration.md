@@ -148,7 +148,7 @@ axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).a
 - `auth.guard()` loads the session and user on every request, so a disabled account or a revoked session loses access at once. `auth.guard().optional()` also lets anonymous requests through, for routes that read the caller with `OptionalAuthUser`.
 - Without `into_make_service_with_connect_info`, per-IP limits are off and `rustauth.client.peer-unknown` is logged once.
 - A web app on another origin needs CORS that allows the `Authorization` and `Content-Type` request headers. Bodies of `429` responses repeat `Retry-After` as `details.retryAfterSecs`, so the header need not be exposed.
-- Delete expired sessions now and then with `auth.service().purge()`:
+- Delete expired sessions, and the sign-in failure records of usernames without an account that no longer count, now and then with `auth.service().purge()`:
 
 ```rust
 fn purge_hourly(auth: &RustAuth) {
@@ -441,5 +441,5 @@ The token is a bearer credential: whoever holds it acts as the user until it exp
 - [ ] `AUTH_*` variables documented; `AUTH_SETUP_TOKEN` set when several instances run; proxies listed in `AUTH_TRUSTED_PROXIES`.
 - [ ] `auth.router()` merged into the API router and its OpenAPI document; `auth.guard()` in front of every other protected route; served with `into_make_service_with_connect_info`.
 - [ ] One adapter module maps `AuthError` and `AuthUser` into the application's own types.
-- [ ] Expired sessions purged periodically.
+- [ ] Expired sessions and stale failure records purged periodically (`auth.service().purge()`).
 - [ ] Web app installs `@rustauth/contracts` at the same ref, compiles its sources, and parses responses with its schemas.

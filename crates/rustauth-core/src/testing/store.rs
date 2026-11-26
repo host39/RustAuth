@@ -1,6 +1,7 @@
 //! `MemoryStore`: both repositories over one in-memory state, with the same rules as the
 //! Postgres adapter (case-insensitive usernames, registration decided under the lock, the
-//! last-administrator guard, cascading deletes, and atomic lockout updates).
+//! last-administrator guard, cascading deletes, and atomic lockout steps for accounts and for
+//! usernames without one).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,7 +11,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
 use crate::entities::{
-    Lockout, NewPassword, NewUser, PasswordCredential, RegisterPolicy, Session, User, UserPatch,
+    Lockout, NewPassword, NewUser, PasswordCredential, RegisterPolicy, Reservation, Session,
+    Subject, User, UserPatch,
 };
 use crate::error::{AuthError, AuthResult};
 use crate::ports::{SessionRepository, UserRepository};
@@ -21,11 +23,21 @@ struct State {
     users: HashMap<UserId, User>,
     credentials: HashMap<UserId, PasswordCredential>,
     sessions: HashMap<SessionId, Session>,
+    /// Lockout state of usernames without an account, by lowercase username.
+    names: HashMap<String, Lockout>,
 }
 
 impl State {
     fn user(&mut self, id: UserId) -> AuthResult<&mut User> {
         self.users.get_mut(&id).ok_or(AuthError::not_found("User"))
+    }
+
+    /// The stored lockout of `subject`, `None` when there is none.
+    fn lockout(&mut self, subject: &Subject) -> Option<&mut Lockout> {
+        match subject {
+            Subject::User(id) => self.users.get_mut(id).map(|user| &mut user.lockout),
+            Subject::Name(name) => self.names.get_mut(&name.canonical()),
+        }
     }
 
     /// Enabled administrators other than `id`.
@@ -197,32 +209,68 @@ impl UserRepository for MemoryStore {
         Ok(())
     }
 
-    async fn record_failure(
+    async fn reserve(
         &self,
-        user: UserId,
+        subject: &Subject,
         at: DateTime<Utc>,
         since: DateTime<Utc>,
-    ) -> AuthResult<Lockout> {
+        threshold: u32,
+    ) -> AuthResult<Reservation> {
         let mut state = self.open()?;
-        let user = state.user(user)?;
-        user.lockout = user.lockout.fail(at, since);
-        Ok(user.lockout)
+        let lockout = match subject {
+            Subject::User(id) => &mut state.user(*id)?.lockout,
+            Subject::Name(name) => state.names.entry(name.canonical()).or_default(),
+        };
+        let reservation = lockout.reserve(at, since, threshold);
+        if let Reservation::Granted(next) = reservation {
+            *lockout = next;
+        }
+        Ok(reservation)
     }
 
-    async fn lock(&self, user: UserId, until: DateTime<Utc>, lockouts: u32) -> AuthResult<bool> {
+    async fn lock(
+        &self,
+        subject: &Subject,
+        seen: Lockout,
+        until: DateTime<Utc>,
+    ) -> AuthResult<bool> {
         let mut state = self.open()?;
-        let user = state.user(user)?;
-        if user.lockout.lockouts != lockouts {
+        let Some(lockout) = state.lockout(subject).filter(|stored| stored.holds(&seen)) else {
             return Ok(false);
-        }
-        user.lockout = user.lockout.lock(until);
+        };
+        *lockout = lockout.lock(until);
         Ok(true)
+    }
+
+    async fn clear(&self, subject: &Subject, at: DateTime<Utc>) -> AuthResult<Option<Lockout>> {
+        let mut state = self.open()?;
+        if let Subject::User(id) = subject {
+            state.user(*id)?;
+        }
+        let Some(lockout) = state.lockout(subject) else {
+            return Ok(None);
+        };
+        if lockout.locked(at).is_some() {
+            return Ok(Some(*lockout));
+        }
+        *lockout = Lockout::default();
+        if let Subject::Name(name) = subject {
+            state.names.remove(&name.canonical());
+        }
+        Ok(None)
     }
 
     async fn unlock(&self, user: UserId) -> AuthResult<()> {
         let mut state = self.open()?;
         state.user(user)?.lockout = Lockout::default();
         Ok(())
+    }
+
+    async fn prune(&self, since: DateTime<Utc>) -> AuthResult<u64> {
+        let mut state = self.open()?;
+        let before = state.names.len();
+        state.names.retain(|_, lockout| !lockout.is_stale(since));
+        Ok((before - state.names.len()) as u64)
     }
 }
 
@@ -395,12 +443,59 @@ mod tests {
             .create(new_user("alice"), password())
             .await
             .expect("created");
-        let until = DateTime::UNIX_EPOCH;
-        assert!(store.lock(user.id, until, 0).await.expect("locked"));
-        // A second failure that also decided on `lockouts == 0` does not lock again.
-        assert!(!store.lock(user.id, until, 0).await.expect("not locked"));
+        let subject = Subject::User(user.id);
+        let at = DateTime::UNIX_EPOCH;
+        let since = at - chrono::TimeDelta::minutes(15);
+        let Reservation::Granted(seen) = store.reserve(&subject, at, since, 1).await.expect("ok")
+        else {
+            panic!("the first check is granted");
+        };
+        // The window holds one running check: a second one is refused.
+        assert!(matches!(
+            store.reserve(&subject, at, since, 1).await.expect("ok"),
+            Reservation::Refused(_)
+        ));
+        let until = at + chrono::TimeDelta::minutes(15);
+        assert!(store.lock(&subject, seen, until).await.expect("locked"));
+        // A second failure that saw the same state does not lock again.
+        assert!(!store.lock(&subject, seen, until).await.expect("not locked"));
         let stored = store.get(user.id).await.expect("read").expect("exists");
         assert_eq!(stored.lockout.lockouts, 1);
+        // A correct password cannot clear it while it lasts.
+        let locked = store.clear(&subject, at).await.expect("ok");
+        assert_eq!(locked.and_then(|lockout| lockout.locked(at)), Some(until));
+    }
+
+    #[tokio::test]
+    async fn tracks_usernames_without_an_account_by_lowercase_name() {
+        let store = MemoryStore::new();
+        let at = DateTime::UNIX_EPOCH;
+        let since = at - chrono::TimeDelta::minutes(15);
+        let lower = Subject::Name(Username::new("ghost").expect("valid"));
+        let upper = Subject::Name(Username::new("GHOST").expect("valid"));
+        store.reserve(&lower, at, since, 5).await.expect("ok");
+        let second = store.reserve(&upper, at, since, 5).await.expect("ok");
+        assert!(matches!(
+            second,
+            Reservation::Granted(Lockout {
+                failed_count: 2,
+                ..
+            })
+        ));
+        // Still inside the window: kept. Afterwards: pruned.
+        assert_eq!(store.prune(since).await.expect("pruned"), 0);
+        assert_eq!(
+            store
+                .prune(at + chrono::TimeDelta::seconds(1))
+                .await
+                .expect("pruned"),
+            1
+        );
+        let missing = store
+            .reserve(&Subject::User(UserId::generate()), at, since, 5)
+            .await
+            .expect_err("missing");
+        assert!(matches!(missing, AuthError::NotFound { .. }));
     }
 
     #[tokio::test]

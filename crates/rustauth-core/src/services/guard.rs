@@ -2,12 +2,19 @@
 //!
 //! Three layers (see "Brute-Force Protection" in the design):
 //!
-//! 1. Account lockout, persisted through `UserRepository::record_failure` and `lock`. The lock
-//!    is checked before the password, so even the correct password fails and no hashing work is
-//!    spent while it lasts. Each consecutive lockout doubles the duration, up to the maximum.
-//! 2. Unknown usernames count the same way in memory, so lockout does not reveal which accounts
-//!    exist.
-//! 3. Failed sign-ins per client IP, counted in memory per failure window.
+//! 1. Account lockout, persisted through the `UserRepository` lockout steps. Every password check
+//!    is reserved before it runs ([`LoginGuard::begin`]): one atomic step counts it as a failure
+//!    and refuses it while the account is locked or the failure window already holds the
+//!    threshold, so concurrent attempts cannot get around the limit and no hashing work is spent
+//!    on a refused one. A correct password then clears the count ([`LoginGuard::succeed`]) unless
+//!    a concurrent failure locked the account meanwhile (the lock wins), and a wrong one that
+//!    reached the threshold locks it ([`LoginGuard::fail`]). Each consecutive lockout doubles the
+//!    duration, up to the maximum.
+//! 2. Usernames without an account take the same steps in the same storage
+//!    ([`Subject::Name`]), so lockout does not reveal which accounts exist, on any instance.
+//! 3. Failed sign-ins per client IP, counted in memory per failure window. An attempt counts from
+//!    the moment it is admitted ([`LoginGuard::admit`]), so concurrent attempts cannot get around
+//!    this limit either; it is given back unless its password check failed.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -16,25 +23,13 @@ use std::sync::{Arc, Mutex};
 use chrono::{DateTime, TimeDelta, Utc};
 
 use crate::config::AuthConfig;
-use crate::entities::{Lockout, User};
+use crate::entities::{Lockout, Reservation, Subject};
 use crate::error::{AuthError, AuthResult};
 use crate::ports::{Clock, UserRepository};
 use crate::services::shared::{MAX_ENTRIES, ip_key, lock, seconds_until};
 use crate::values::ClientInfo;
 
-/// Longest unknown username kept as a key; longer input is cut, which only merges junk keys.
-const MAX_KEY_CHARS: usize = 64;
-
-/// Who a sign-in attempt is for.
-#[derive(Clone, Copy, Debug)]
-pub enum Attempt<'a> {
-    /// An existing account; its lockout state is persisted.
-    Known(&'a User),
-    /// A username with no account (as typed); its state is kept in memory.
-    Unknown(&'a str),
-}
-
-/// Failed sign-ins of one client IP in the current window.
+/// Failed sign-ins of one client IP in the current window, running ones included.
 #[derive(Clone, Copy, Debug)]
 struct Failures {
     start: DateTime<Utc>,
@@ -49,8 +44,31 @@ pub struct LoginGuard {
     max: TimeDelta,
     window: TimeDelta,
     ip_limit: u32,
-    unknown: Mutex<HashMap<String, Lockout>>,
     ips: Mutex<HashMap<IpAddr, Failures>>,
+}
+
+/// One sign-in attempt, counted against its client IP while it runs ([`LoginGuard::admit`]).
+/// Dropping it gives the count back; [`Slot::keep`] keeps it as a failure.
+#[must_use = "dropping the slot gives the attempt back at once"]
+pub struct Slot<'a> {
+    guard: &'a LoginGuard,
+    /// The IP key and the start of the window the attempt counts in.
+    counted: Option<(IpAddr, DateTime<Utc>)>,
+}
+
+impl Slot<'_> {
+    /// Keeps the attempt as a failure of its client IP: its password check failed.
+    pub fn keep(mut self) {
+        self.counted = None;
+    }
+}
+
+impl Drop for Slot<'_> {
+    fn drop(&mut self) {
+        if let Some((key, start)) = self.counted.take() {
+            self.guard.release(key, start);
+        }
+    }
 }
 
 impl LoginGuard {
@@ -63,151 +81,25 @@ impl LoginGuard {
             max: config.lockout_max(),
             window: config.failure_window(),
             ip_limit: config.ip_failure_limit(),
-            unknown: Mutex::new(HashMap::new()),
             ips: Mutex::new(HashMap::new()),
         }
     }
 
-    /// Refuses a client that is over the per-IP failure limit (`RateLimited`). Clients without a
-    /// known IP are not limited here.
-    pub fn admit(&self, client: &ClientInfo) -> AuthResult<()> {
+    /// Counts an attempt against its client IP, or refuses it (`RateLimited`) when the window
+    /// already holds the per-IP limit of failures, finished or running. Clients without a known
+    /// IP are not limited here.
+    pub fn admit(&self, client: &ClientInfo) -> AuthResult<Slot<'_>> {
         let Some(ip) = client.ip() else {
-            return Ok(());
+            return Ok(Slot {
+                guard: self,
+                counted: None,
+            });
         };
         let now = self.clock.now();
-        let ips = lock(&self.ips);
-        if let Some(failures) = ips.get(&ip_key(ip)) {
-            let end = failures.start + self.window;
-            if now < end && failures.count >= self.ip_limit {
-                return Err(AuthError::RateLimited {
-                    retry_after_secs: seconds_until(now, end),
-                });
-            }
-        }
-        Ok(())
-    }
-
-    /// Refuses an attempt on a locked account (`AccountLocked`). Call it before checking the
-    /// password.
-    pub fn check(&self, attempt: &Attempt<'_>) -> AuthResult<()> {
-        let now = self.clock.now();
-        let until = match attempt {
-            Attempt::Known(user) => user.lockout.locked(now),
-            Attempt::Unknown(username) => lock(&self.unknown)
-                .get(&key(username))
-                .and_then(|lockout| lockout.locked(now)),
-        };
-        match until {
-            Some(until) => Err(AuthError::AccountLocked {
-                retry_after_secs: seconds_until(now, until),
-            }),
-            None => Ok(()),
-        }
-    }
-
-    /// Records a wrong password and returns the error for the caller to return:
-    /// `InvalidCredentials`, or `AccountLocked` when this failure reached the threshold.
-    pub async fn fail(&self, client: &ClientInfo, attempt: &Attempt<'_>) -> AuthError {
-        let now = self.clock.now();
-        let since = now - self.window;
-        self.record_ip(client, now);
-        match attempt {
-            Attempt::Known(user) => self
-                .fail_known(user, client, now, since)
-                .await
-                .unwrap_or_else(|error| error),
-            Attempt::Unknown(username) => self.fail_unknown(username, client, now, since),
-        }
-    }
-
-    /// Clears the account's failure state after a correct password.
-    pub async fn succeed(&self, user: &User) -> AuthResult<()> {
-        if user.lockout.is_clear() {
-            return Ok(());
-        }
-        self.users.unlock(user.id).await
-    }
-
-    /// Length of the lockout that follows `lockouts` earlier consecutive ones: the first
-    /// duration, doubled each time, capped at the maximum.
-    pub fn duration(&self, lockouts: u32) -> TimeDelta {
-        let factor = 1i32 << lockouts.min(30);
-        self.duration
-            .checked_mul(factor)
-            .map_or(self.max, |duration| duration.min(self.max))
-    }
-
-    async fn fail_known(
-        &self,
-        user: &User,
-        client: &ClientInfo,
-        now: DateTime<Utc>,
-        since: DateTime<Utc>,
-    ) -> AuthResult<AuthError> {
-        let lockout = match self.users.record_failure(user.id, now, since).await {
-            Ok(lockout) => lockout,
-            // Deleted since it was loaded: answer as for any unknown account.
-            Err(AuthError::NotFound { .. }) => return Ok(AuthError::InvalidCredentials),
-            Err(error) => return Err(error),
-        };
-        tracing::warn!(
-            user_id = %user.id,
-            ip = ?client.ip(),
-            count = lockout.failed_count,
-            "rustauth.login.failed"
-        );
-        if lockout.failed_count < self.threshold {
-            return Ok(AuthError::InvalidCredentials);
-        }
-        let until = now + self.duration(lockout.lockouts);
-        // `false` means a concurrent failure locked the account first; it is locked either way.
-        if self.users.lock(user.id, until, lockout.lockouts).await? {
-            tracing::info!(user_id = %user.id, until = %until, "rustauth.login.locked");
-        }
-        Ok(AuthError::AccountLocked {
-            retry_after_secs: seconds_until(now, until),
-        })
-    }
-
-    fn fail_unknown(
-        &self,
-        username: &str,
-        client: &ClientInfo,
-        now: DateTime<Utc>,
-        since: DateTime<Utc>,
-    ) -> AuthError {
-        let key = key(username);
-        let mut unknown = lock(&self.unknown);
-        if !unknown.contains_key(&key) && unknown.len() >= MAX_ENTRIES {
-            prune_unknown(&mut unknown, now, since);
-        }
-        let entry = unknown.entry(key).or_default();
-        *entry = entry.fail(now, since);
-        tracing::warn!(
-            user_id = "unknown",
-            ip = ?client.ip(),
-            count = entry.failed_count,
-            "rustauth.login.failed"
-        );
-        if entry.failed_count < self.threshold {
-            return AuthError::InvalidCredentials;
-        }
-        let until = now + self.duration(entry.lockouts);
-        *entry = entry.lock(until);
-        tracing::info!(user_id = "unknown", until = %until, "rustauth.login.locked");
-        AuthError::AccountLocked {
-            retry_after_secs: seconds_until(now, until),
-        }
-    }
-
-    fn record_ip(&self, client: &ClientInfo, now: DateTime<Utc>) {
-        let Some(ip) = client.ip() else {
-            return;
-        };
         let key = ip_key(ip);
+        let window = self.window;
         let mut ips = lock(&self.ips);
         if !ips.contains_key(&key) && ips.len() >= MAX_ENTRIES {
-            let window = self.window;
             ips.retain(|_, failures| now < failures.start + window);
             if ips.len() >= MAX_ENTRIES
                 && let Some(oldest) = ips
@@ -222,39 +114,120 @@ impl LoginGuard {
             start: now,
             count: 0,
         });
-        if now >= failures.start + self.window {
+        if now >= failures.start + window {
             *failures = Failures {
                 start: now,
                 count: 0,
             };
         }
+        if failures.count >= self.ip_limit {
+            return Err(AuthError::RateLimited {
+                retry_after_secs: seconds_until(now, failures.start + window),
+            });
+        }
         failures.count = failures.count.saturating_add(1);
+        Ok(Slot {
+            guard: self,
+            counted: Some((key, failures.start)),
+        })
     }
-}
 
-/// The in-memory key for an unknown username: trimmed, lowercase, and bounded in length.
-fn key(username: &str) -> String {
-    username
-        .trim()
-        .to_lowercase()
-        .chars()
-        .take(MAX_KEY_CHARS)
-        .collect()
-}
+    /// Reserves a password check for `subject` (see [`Lockout::reserve`]) and returns the state
+    /// with it counted, for [`LoginGuard::fail`]. Refuses with `AccountLocked` while the subject
+    /// is locked or its window is full. Call it before checking the password.
+    pub async fn begin(&self, subject: &Subject) -> AuthResult<Lockout> {
+        let now = self.clock.now();
+        match self
+            .users
+            .reserve(subject, now, now - self.window, self.threshold)
+            .await?
+        {
+            Reservation::Granted(lockout) => Ok(lockout),
+            // Full but not locked yet: a running check holds the last failure the window allows,
+            // and the lock it may set is the wait.
+            Reservation::Refused(lockout) => {
+                let until = lockout
+                    .locked(now)
+                    .unwrap_or_else(|| now + self.duration(lockout.lockouts));
+                Err(AuthError::AccountLocked {
+                    retry_after_secs: seconds_until(now, until),
+                })
+            }
+        }
+    }
 
-/// Drops unknown usernames that are neither locked nor inside the failure window; if the map is
-/// still full, drops the one with the oldest failure.
-fn prune_unknown(unknown: &mut HashMap<String, Lockout>, now: DateTime<Utc>, since: DateTime<Utc>) {
-    unknown.retain(|_, lockout| {
-        lockout.locked(now).is_some() || lockout.last_failed_at.is_some_and(|last| last >= since)
-    });
-    if unknown.len() >= MAX_ENTRIES
-        && let Some(oldest) = unknown
-            .iter()
-            .min_by_key(|(_, lockout)| lockout.last_failed_at)
-            .map(|(key, _)| key.clone())
-    {
-        unknown.remove(&oldest);
+    /// Settles a wrong password whose check [`LoginGuard::begin`] reserved (`seen`), and returns
+    /// the error for the caller to return: `InvalidCredentials`, or `AccountLocked` when this
+    /// failure reached the threshold (it locks the subject then).
+    pub async fn fail(&self, client: &ClientInfo, subject: &Subject, seen: Lockout) -> AuthError {
+        self.settle(client, subject, seen)
+            .await
+            .unwrap_or_else(|error| error)
+    }
+
+    /// Clears the subject's failures after a correct password, or fails with `AccountLocked`
+    /// when a concurrent failure locked it during the check.
+    pub async fn succeed(&self, subject: &Subject) -> AuthResult<()> {
+        let now = self.clock.now();
+        match self.users.clear(subject, now).await? {
+            None => Ok(()),
+            Some(lockout) => Err(AuthError::AccountLocked {
+                retry_after_secs: seconds_until(now, lockout.locked(now).unwrap_or(now)),
+            }),
+        }
+    }
+
+    /// Length of the lockout that follows `lockouts` earlier consecutive ones: the first
+    /// duration, doubled each time, capped at the maximum.
+    pub fn duration(&self, lockouts: u32) -> TimeDelta {
+        let factor = 1i32 << lockouts.min(30);
+        self.duration
+            .checked_mul(factor)
+            .map_or(self.max, |duration| duration.min(self.max))
+    }
+
+    async fn settle(
+        &self,
+        client: &ClientInfo,
+        subject: &Subject,
+        seen: Lockout,
+    ) -> AuthResult<AuthError> {
+        let user_id = match subject {
+            Subject::User(id) => id.to_string(),
+            Subject::Name(_) => "unknown".to_owned(),
+        };
+        tracing::warn!(
+            user_id,
+            ip = ?client.ip(),
+            count = seen.failed_count,
+            "rustauth.login.failed"
+        );
+        if seen.failed_count < self.threshold {
+            return Ok(AuthError::InvalidCredentials);
+        }
+        let now = self.clock.now();
+        let until = now + self.duration(seen.lockouts);
+        // `false` means a concurrent failure locked first (it is locked either way) or a correct
+        // password cleared the count meanwhile; this attempt used the last check either way.
+        if self.users.lock(subject, seen, until).await? {
+            tracing::info!(user_id, until = %until, "rustauth.login.locked");
+        }
+        Ok(AuthError::AccountLocked {
+            retry_after_secs: seconds_until(now, until),
+        })
+    }
+
+    /// Gives back an attempt counted in the window that started at `start`.
+    fn release(&self, key: IpAddr, start: DateTime<Utc>) {
+        let mut ips = lock(&self.ips);
+        if let Some(failures) = ips.get_mut(&key)
+            && failures.start == start
+        {
+            failures.count = failures.count.saturating_sub(1);
+            if failures.count == 0 {
+                ips.remove(&key);
+            }
+        }
     }
 }
 
@@ -262,7 +235,7 @@ fn prune_unknown(unknown: &mut HashMap<String, Lockout>, now: DateTime<Utc>, sin
 mod tests {
     use super::*;
     use crate::testing::Fakes;
-    use crate::values::{DisplayName, Role, UserId, Username};
+    use crate::values::{UserId, Username};
 
     fn guard(config: &AuthConfig) -> (Fakes, LoginGuard) {
         let fakes = Fakes::new();
@@ -270,24 +243,30 @@ mod tests {
         (fakes, guard)
     }
 
+    fn name(value: &str) -> Subject {
+        Subject::Name(Username::new(value).expect("valid"))
+    }
+
+    fn client(ip: &str) -> ClientInfo {
+        ClientInfo::new(Some(ip.parse().expect("valid address")), "")
+    }
+
+    fn counted(guard: &LoginGuard, ip: &str) -> u32 {
+        let key = ip_key(ip.parse().expect("valid address"));
+        lock(&guard.ips)
+            .get(&key)
+            .map_or(0, |failures| failures.count)
+    }
+
     #[tokio::test]
-    async fn a_deleted_account_fails_like_an_unknown_one() {
-        let (fakes, guard) = guard(&AuthConfig::default());
+    async fn a_deleted_account_cannot_be_reserved() {
+        let (_, guard) = guard(&AuthConfig::default());
         // Never stored, as if deleted after the sign-in loaded it.
-        let user = User {
-            id: UserId::generate(),
-            username: Username::new("gone").expect("valid"),
-            display_name: DisplayName::new("Gone").expect("valid"),
-            role: Role::User,
-            disabled_at: None,
-            created_at: fakes.clock.now(),
-            updated_at: fakes.clock.now(),
-            lockout: Lockout::default(),
-        };
         let error = guard
-            .fail(&ClientInfo::default(), &Attempt::Known(&user))
-            .await;
-        assert!(matches!(error, AuthError::InvalidCredentials), "{error:?}");
+            .begin(&Subject::User(UserId::generate()))
+            .await
+            .expect_err("missing");
+        assert!(matches!(error, AuthError::NotFound { .. }), "{error:?}");
     }
 
     #[test]
@@ -302,52 +281,96 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unknown_usernames_share_a_key_regardless_of_case() {
+    async fn unknown_usernames_share_a_state_regardless_of_case() {
         let config = AuthConfig::builder()
             .lockout_threshold(2)
             .build()
             .expect("valid");
         let (_, guard) = guard(&config);
         let client = ClientInfo::default();
-        let first = guard.fail(&client, &Attempt::Unknown("Ghost")).await;
+        let seen = guard.begin(&name("Ghost")).await.expect("granted");
+        let first = guard.fail(&client, &name("Ghost"), seen).await;
         assert!(matches!(first, AuthError::InvalidCredentials));
-        let second = guard.fail(&client, &Attempt::Unknown(" ghost ")).await;
+        let seen = guard.begin(&name(" ghost ")).await.expect("granted");
+        let second = guard.fail(&client, &name(" ghost "), seen).await;
         assert!(matches!(second, AuthError::AccountLocked { .. }));
-        assert!(guard.check(&Attempt::Unknown("GHOST")).is_err());
-        assert!(guard.check(&Attempt::Unknown("someone_else")).is_ok());
+        assert!(guard.begin(&name("GHOST")).await.is_err());
+        assert!(guard.begin(&name("someone_else")).await.is_ok());
     }
 
     #[tokio::test]
-    async fn bounds_the_unknown_username_map() {
+    async fn running_checks_fill_the_window() {
+        let config = AuthConfig::builder()
+            .lockout_threshold(2)
+            .build()
+            .expect("valid");
+        let (_, guard) = guard(&config);
+        let ghost = name("ghost");
+        guard.begin(&ghost).await.expect("first check");
+        guard.begin(&ghost).await.expect("second check");
+        // Neither check has finished, yet a third is refused before any hashing.
+        let error = guard.begin(&ghost).await.expect_err("window full");
+        assert_eq!(error.retry_after_secs(), Some(900));
+    }
+
+    #[test]
+    fn counts_running_attempts_per_ip_and_gives_back_the_successful_ones() {
+        let config = AuthConfig::builder()
+            .ip_failure_limit(2)
+            .build()
+            .expect("valid");
+        let (_, guard) = guard(&config);
+        let attacker = client("203.0.113.7");
+        let first = guard.admit(&attacker).expect("first");
+        let second = guard.admit(&attacker).expect("second");
+        // Two attempts are running: a third is refused although neither has failed yet.
+        let error = guard.admit(&attacker).err().expect("over the limit");
+        assert_eq!(error.retry_after_secs(), Some(900));
+        drop(first);
+        assert_eq!(
+            counted(&guard, "203.0.113.7"),
+            1,
+            "a dropped slot is given back"
+        );
+        second.keep();
+        guard.admit(&attacker).expect("room again").keep();
+        assert_eq!(counted(&guard, "203.0.113.7"), 2, "kept slots stay counted");
+        assert!(guard.admit(&attacker).is_err());
+        guard
+            .admit(&client("198.51.100.1"))
+            .expect("another client")
+            .keep();
+        guard
+            .admit(&ClientInfo::default())
+            .expect("no limit")
+            .keep();
+    }
+
+    #[test]
+    fn a_slot_from_an_earlier_window_gives_nothing_back() {
         let (fakes, guard) = guard(&AuthConfig::default());
-        let client = ClientInfo::default();
-        for index in 0..MAX_ENTRIES {
-            guard
-                .fail(&client, &Attempt::Unknown(&format!("user{index}")))
-                .await;
-        }
-        assert_eq!(lock(&guard.unknown).len(), MAX_ENTRIES);
-        // Every entry is inside the window: the oldest one makes room.
-        guard.fail(&client, &Attempt::Unknown("newcomer")).await;
-        assert_eq!(lock(&guard.unknown).len(), MAX_ENTRIES);
-        // Once the window has passed, the stale entries are dropped together.
+        let attacker = client("203.0.113.7");
+        let old = guard.admit(&attacker).expect("admitted");
         fakes.clock.advance(TimeDelta::minutes(16));
-        guard.fail(&client, &Attempt::Unknown("latecomer")).await;
-        assert_eq!(lock(&guard.unknown).len(), 1);
+        guard.admit(&attacker).expect("new window").keep();
+        drop(old);
+        assert_eq!(counted(&guard, "203.0.113.7"), 1);
     }
 
-    #[tokio::test]
-    async fn bounds_the_ip_map() {
+    #[test]
+    fn bounds_the_ip_map() {
         let (fakes, guard) = guard(&AuthConfig::default());
         for index in 0..MAX_ENTRIES {
             let index = u32::try_from(index).expect("small");
             let client = ClientInfo::new(Some(IpAddr::V4(index.into())), "");
-            guard.record_ip(&client, fakes.clock.now());
+            guard.admit(&client).expect("admitted").keep();
         }
         assert_eq!(lock(&guard.ips).len(), MAX_ENTRIES);
         fakes.clock.advance(TimeDelta::minutes(16));
-        let client = ClientInfo::new(Some("198.51.100.1".parse().expect("valid")), "");
-        guard.record_ip(&client, fakes.clock.now());
+        guard
+            .admit(&client("198.51.100.1"))
+            .expect("admitted")
+            .keep();
         assert_eq!(lock(&guard.ips).len(), 1);
     }
 }

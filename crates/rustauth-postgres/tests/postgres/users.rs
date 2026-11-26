@@ -1,10 +1,10 @@
 //! `SqlxUserRepository`: registration under the advisory lock, case-insensitive usernames, the
-//! last-administrator guard, and the atomic lockout updates.
+//! last-administrator guard, and the atomic lockout steps for accounts and unknown usernames.
 
 use chrono::TimeDelta;
 use rustauth_core::{
-    AuthError, AuthResult, DisplayName, Lockout, Page, RegisterPolicy, Role, SessionRepository,
-    User, UserId, UserPatch, UserRepository, Username,
+    AuthError, AuthResult, DisplayName, Lockout, Page, RegisterPolicy, Reservation, Role,
+    SessionRepository, Subject, User, UserId, UserPatch, UserRepository, Username,
 };
 use rustauth_postgres::{SqlxSessionRepository, SqlxUserRepository};
 use sqlx::PgPool;
@@ -277,7 +277,7 @@ async fn updates_only_the_patched_fields(pool: PgPool) {
     create(&users, "admin", Role::Administrator).await;
     let user = create(&users, "alice", Role::User).await;
     users
-        .record_failure(user.id, at(1), at(-14))
+        .reserve(&Subject::User(user.id), at(1), at(-14), 5)
         .await
         .expect("recorded");
 
@@ -475,29 +475,55 @@ async fn sets_and_replaces_the_password_hash(pool: PgPool) {
     assert!(matches!(missing, AuthError::NotFound { entity: "User" }));
 }
 
+fn name(value: &str) -> Subject {
+    Subject::Name(Username::new(value).expect("valid username"))
+}
+
+/// The reserved state, failing the test on a refusal.
+async fn granted(users: &SqlxUserRepository, subject: &Subject, minute: i64) -> Lockout {
+    let since = at(minute) - TimeDelta::minutes(15);
+    match users.reserve(subject, at(minute), since, 5).await {
+        Ok(Reservation::Granted(lockout)) => lockout,
+        other => panic!("minute {minute}: {other:?}"),
+    }
+}
+
 #[sqlx::test(migrator = "rustauth_postgres::MIGRATOR")]
 #[ignore = "requires Postgres: run make test-db"]
-async fn records_failures_like_the_core_rule(pool: PgPool) {
+async fn reserves_checks_like_the_core_rule(pool: PgPool) {
     let users = SqlxUserRepository::new(pool);
-    let user = create(&users, "alice", Role::User).await;
+    let alice = create(&users, "alice", Role::User).await;
     let window = TimeDelta::minutes(15);
-    let mut expected = Lockout::default();
-    // Three failures inside the window, two after a gap longer than the window, and one exactly
-    // a window after the previous failure (which still counts).
-    for minute in [0, 5, 10, 30, 31, 46] {
-        let (now, since) = (at(minute), at(minute) - window);
-        expected = expected.fail(now, since);
-        let recorded = users
-            .record_failure(user.id, now, since)
+    for subject in [Subject::User(alice.id), name("Nobody")] {
+        let mut expected = Lockout::default();
+        // Three failures inside the window, two after a gap longer than the window, and one
+        // exactly a window after the previous failure (which still counts).
+        for minute in [0, 5, 10, 30, 31, 46] {
+            let (now, since) = (at(minute), at(minute) - window);
+            let Reservation::Granted(next) = expected.reserve(now, since, 5) else {
+                panic!("the core rule grants minute {minute}");
+            };
+            expected = next;
+            assert_eq!(
+                granted(&users, &subject, minute).await,
+                expected,
+                "{subject:?}"
+            );
+        }
+        assert_eq!(expected.failed_count, 3);
+        // Two more fill the window of five; the next one is refused and changes nothing.
+        granted(&users, &subject, 47).await;
+        let full = granted(&users, &subject, 48).await;
+        assert_eq!(full.failed_count, 5);
+        let refused = users
+            .reserve(&subject, at(49), at(34), 5)
             .await
-            .expect("recorded");
-        assert_eq!(recorded, expected, "minute {minute}");
-        assert_eq!(stored(&users, user.id).await.lockout, expected);
+            .expect("answered");
+        assert_eq!(refused, Reservation::Refused(full), "{subject:?}");
     }
-    assert_eq!(expected.failed_count, 3);
-
+    assert_eq!(stored(&users, alice.id).await.lockout.failed_count, 5);
     let missing = users
-        .record_failure(UserId::generate(), at(0), at(-15))
+        .reserve(&Subject::User(UserId::generate()), at(0), at(-15), 5)
         .await
         .expect_err("missing");
     assert!(matches!(missing, AuthError::NotFound { entity: "User" }));
@@ -505,53 +531,123 @@ async fn records_failures_like_the_core_rule(pool: PgPool) {
 
 #[sqlx::test(migrator = "rustauth_postgres::MIGRATOR")]
 #[ignore = "requires Postgres: run make test-db"]
-async fn counts_every_concurrent_failure(pool: PgPool) {
+async fn concurrent_reservations_never_pass_the_threshold(pool: PgPool) {
     let users = SqlxUserRepository::new(pool);
-    let user = create(&users, "alice", Role::User).await;
-    let mut tasks = JoinSet::new();
-    for _ in 0..10 {
-        let users = users.clone();
-        tasks.spawn(async move { users.record_failure(user.id, at(0), at(-15)).await });
+    let alice = create(&users, "alice", Role::User).await;
+    for subject in [Subject::User(alice.id), name("ghost")] {
+        let mut tasks = JoinSet::new();
+        for _ in 0..12 {
+            let (users, subject) = (users.clone(), subject.clone());
+            tasks.spawn(async move { users.reserve(&subject, at(0), at(-15), 5).await });
+        }
+        let results = tasks.join_all().await;
+        let mut counts: Vec<u32> = results
+            .iter()
+            .filter_map(|result| match result {
+                Ok(Reservation::Granted(lockout)) => Some(lockout.failed_count),
+                Ok(Reservation::Refused(_)) => None,
+                Err(error) => panic!("{error:?}"),
+            })
+            .collect();
+        counts.sort_unstable();
+        assert_eq!(counts, [1, 2, 3, 4, 5], "{subject:?}");
     }
-    for result in tasks.join_all().await {
-        result.expect("recorded");
-    }
-    assert_eq!(stored(&users, user.id).await.lockout.failed_count, 10);
 }
 
 #[sqlx::test(migrator = "rustauth_postgres::MIGRATOR")]
 #[ignore = "requires Postgres: run make test-db"]
-async fn locks_once_per_lockout_counter_and_unlocks(pool: PgPool) {
+async fn locks_once_while_the_failures_hold_and_unlocks(pool: PgPool) {
     let users = SqlxUserRepository::new(pool);
     let user = create(&users, "alice", Role::User).await;
-    let failed = users
-        .record_failure(user.id, at(0), at(-15))
-        .await
-        .expect("recorded");
-    assert!(users.lock(user.id, at(15), 0).await.expect("locked"));
-    // A second failure that also decided on `lockouts == 0` does not lock again.
-    assert!(!users.lock(user.id, at(30), 0).await.expect("not locked"));
-    let locked = stored(&users, user.id).await.lockout;
-    assert_eq!(locked, failed.lock(at(15)));
-    assert_eq!(locked.locked(at(14)), Some(at(15)));
-
-    assert!(users.lock(user.id, at(45), 1).await.expect("locked again"));
-    assert_eq!(stored(&users, user.id).await.lockout.lockouts, 2);
+    for subject in [Subject::User(user.id), name("ghost")] {
+        let seen = granted(&users, &subject, 0).await;
+        assert!(users.lock(&subject, seen, at(15)).await.expect("locked"));
+        // A second failure that saw the same state does not lock again.
+        assert!(
+            !users
+                .lock(&subject, seen, at(30))
+                .await
+                .expect("not locked")
+        );
+        // Locked: checks are refused, and a correct password cannot clear it.
+        let refused = users
+            .reserve(&subject, at(1), at(-14), 5)
+            .await
+            .expect("answered");
+        assert_eq!(refused, Reservation::Refused(seen.lock(at(15))));
+        let kept = users.clear(&subject, at(1)).await.expect("answered");
+        assert_eq!(kept, Some(seen.lock(at(15))));
+        // Once the lock is over, a correct password clears everything.
+        assert_eq!(users.clear(&subject, at(15)).await.expect("cleared"), None);
+        let fresh = granted(&users, &subject, 16).await;
+        assert_eq!((fresh.failed_count, fresh.lockouts), (1, 0));
+        // A correct password in between: the failure no longer holds and does not lock.
+        users.clear(&subject, at(16)).await.expect("cleared");
+        assert!(
+            !users
+                .lock(&subject, fresh, at(31))
+                .await
+                .expect("not locked")
+        );
+    }
     assert!(
         !users
-            .lock(UserId::generate(), at(15), 0)
+            .lock(
+                &Subject::User(UserId::generate()),
+                Lockout::default(),
+                at(15)
+            )
             .await
             .expect("missing")
     );
+    let missing = users
+        .clear(&Subject::User(UserId::generate()), at(0))
+        .await
+        .expect_err("missing");
+    assert!(matches!(missing, AuthError::NotFound { entity: "User" }));
+    let out_of_range = Lockout {
+        lockouts: u32::MAX,
+        ..Lockout::default()
+    };
     assert!(
         !users
-            .lock(user.id, at(15), u32::MAX)
+            .lock(&Subject::User(user.id), out_of_range, at(15))
             .await
             .expect("out of range")
     );
 
+    let seen = granted(&users, &Subject::User(user.id), 20).await;
+    users
+        .lock(&Subject::User(user.id), seen, at(35))
+        .await
+        .expect("locked");
     users.unlock(user.id).await.expect("unlocked");
     assert!(stored(&users, user.id).await.lockout.is_clear());
     let missing = users.unlock(UserId::generate()).await.expect_err("missing");
     assert!(matches!(missing, AuthError::NotFound { entity: "User" }));
+}
+
+#[sqlx::test(migrator = "rustauth_postgres::MIGRATOR")]
+#[ignore = "requires Postgres: run make test-db"]
+async fn prunes_only_stale_usernames(pool: PgPool) {
+    let users = SqlxUserRepository::new(pool.clone());
+    let alice = create(&users, "alice", Role::User).await;
+    granted(&users, &Subject::User(alice.id), 0).await;
+    granted(&users, &name("recent"), 10).await;
+    granted(&users, &name("stale"), 0).await;
+    let locked = granted(&users, &name("locked"), 0).await;
+    users
+        .lock(&name("locked"), locked, at(15))
+        .await
+        .expect("locked");
+    // At minute 20 the window starts at minute 5: only `stale` no longer counts. `locked` keeps
+    // doubling its next lock, and accounts are never pruned.
+    assert_eq!(users.prune(at(5)).await.expect("pruned"), 1);
+    let left: Vec<String> =
+        sqlx::query_scalar("SELECT username FROM auth.login_failures ORDER BY username")
+            .fetch_all(&pool)
+            .await
+            .expect("listed");
+    assert_eq!(left, ["locked", "recent"]);
+    assert_eq!(stored(&users, alice.id).await.lockout.failed_count, 1);
 }
