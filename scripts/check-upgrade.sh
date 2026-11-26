@@ -9,7 +9,9 @@
 # 2. Runs the current harness (`-- check`): the current migrate step on that database, then the
 #    sample accounts, sessions, lockouts, and application rows through the current code.
 # 3. Runs the Postgres test suite (`make test-db`) with that database as its maintenance
-#    database (`#[sqlx::test]` creates a throwaway database per test next to it).
+#    database. This is a regression run of the current code only: `#[sqlx::test]` creates and
+#    migrates a throwaway database per test next to it, so no test reads the upgraded schema or
+#    rows. Step 2 is what checks them; add anything an upgrade must preserve to the harness.
 #
 # Before the first release tag there is nothing to upgrade from: the check then seeds with the
 # current code as well, so the harness the first tag ships is known to work, and passes with a

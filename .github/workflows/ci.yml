@@ -114,9 +114,9 @@ jobs:
 
   upgrade:
     # "Upgrade Testing" in docs/design/rustauth.md: the previous release tag seeds a fresh
-    # database through its own code, then this commit migrates it, checks the sample data, and
-    # runs the Postgres test suite against it. Before the first tag it tests the harness alone
-    # and passes with a notice. See scripts/check-upgrade.sh.
+    # database through its own code, then this commit migrates it and checks the sample data,
+    # and runs the Postgres test suite on throwaway databases next to it. Before the first tag
+    # it tests the harness alone and passes with a notice. See scripts/check-upgrade.sh.
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
