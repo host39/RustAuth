@@ -173,8 +173,9 @@ impl RustAuthBuilder {
     /// and no setup token is configured, the service generates one and logs it once
     /// (`rustauth.setup.token-issued`); configure `AUTH_SETUP_TOKEN` when several instances run.
     ///
-    /// Needs a reachable database (the schema check and an account count run here, without
-    /// retries): with a lazy pool, call it once the database answers.
+    /// Needs a reachable database (the schema check, and an account count without a configured
+    /// setup token, run here without retries): with a lazy pool, call it once the database
+    /// answers.
     pub async fn build(self) -> Result<RustAuth, BuildError> {
         let ports = match self.storage {
             Storage::Missing => return Err(BuildError::MissingStorage),
