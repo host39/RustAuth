@@ -31,6 +31,9 @@ pub trait UserRepository: Send + Sync {
 
     async fn get(&self, id: UserId) -> AuthResult<Option<User>>;
 
+    /// The accounts with these ids, in no particular order; missing ids are left out.
+    async fn get_many(&self, ids: &[UserId]) -> AuthResult<Vec<User>>;
+
     /// The account and its password credential (if any), matched case-insensitively.
     async fn find(
         &self,

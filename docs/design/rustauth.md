@@ -132,6 +132,7 @@ trait UserRepository {
     async fn register(&self, user: NewUser, credential: NewPassword, policy: RegisterPolicy) -> Result<User>;
     async fn create(&self, user: NewUser, credential: NewPassword) -> Result<User>;  // admin-created accounts
     async fn get(&self, id: UserId) -> Result<Option<User>>;
+    async fn get_many(&self, ids: &[UserId]) -> Result<Vec<User>>; // missing ids are left out
     async fn find(&self, username: &Username) -> Result<Option<(User, Option<PasswordCredential>)>>;
     async fn list(&self, page: Page) -> Result<(Vec<User>, u64)>;
     /// Applies only the fields set in `patch` (display name, role, disabled), so concurrent changes to
@@ -168,7 +169,7 @@ The rules the repositories apply inside their transactions are defined in core s
 
 | Service | Operations |
 | --- | --- |
-| `AuthService` | `setup_status()` (needs setup, registration open), `register(input, setup_token, client)`, `login(username, password, client)`, `logout(principal)`, `verify(bearer)` (hash, load session plus user, reject expired, disabled, or deleted; slide `last_used_at` at most hourly), `me`, `update_profile(display_name)`, `change_password(current, new, client)` (revokes other sessions; a wrong current password counts toward the lockout and fails as a validation error on `current`), `sessions`, `revoke(session_id)`, `revoke_others`, `purge` (deletes expired sessions and the failure records of unknown usernames that no longer count) |
+| `AuthService` | `setup_status()` (needs setup, registration open), `register(input, setup_token, client)`, `login(username, password, client)`, `logout(principal)`, `user(id)` and `users(ids)` (account reads without a caller, for background work), `verify(bearer)` (hash, load session plus user, reject expired, disabled, or deleted; slide `last_used_at` at most hourly), `me`, `update_profile(display_name)`, `change_password(current, new, client)` (revokes other sessions; a wrong current password counts toward the lockout and fails as a validation error on `current`), `sessions`, `revoke(session_id)`, `revoke_others`, `purge` (deletes expired sessions and the failure records of unknown usernames that no longer count) |
 | `AdminService` | `list`, `get`, `create` (temporary password, role), `update` (role, disabled, display name, password reset; every change revokes that user's sessions), `unlock`, `delete`; refuses to remove, disable, or demote the last enabled administrator; caller must be `administrator` |
 | `LoginGuard` | Brute-force protection; see [Brute-Force Protection](#brute-force-protection) |
 | `RateLimiter` | In-memory token buckets per client IP for the public routes |

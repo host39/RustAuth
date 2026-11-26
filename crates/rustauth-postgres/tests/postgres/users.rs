@@ -651,3 +651,19 @@ async fn prunes_only_stale_usernames(pool: PgPool) {
     assert_eq!(left, ["locked", "recent"]);
     assert_eq!(stored(&users, alice.id).await.lockout.failed_count, 1);
 }
+
+#[sqlx::test(migrator = "rustauth_postgres::MIGRATOR")]
+#[ignore = "requires Postgres: run make test-db"]
+async fn gets_many_accounts_at_once(pool: PgPool) {
+    let users = SqlxUserRepository::new(pool);
+    let alice = create(&users, "alice", Role::User).await;
+    let bob = create(&users, "bob", Role::Manager).await;
+    create(&users, "carol", Role::User).await;
+    let mut found = users
+        .get_many(&[bob.id, alice.id, UserId::generate()])
+        .await
+        .expect("read");
+    found.sort_by_key(|user| user.username.canonical());
+    assert_eq!(found, [alice, bob]);
+    assert!(users.get_many(&[]).await.expect("read").is_empty());
+}

@@ -736,3 +736,33 @@ async fn stale_principals_cannot_change_the_password() {
         .expect_err("unknown user");
     assert!(matches!(error, AuthError::Unauthorized), "{error:?}");
 }
+
+#[tokio::test]
+async fn reads_accounts_without_a_caller() {
+    let harness = Harness::start().await;
+    let root = harness.root().await;
+    let alice = harness.create(&root, "alice", Role::Manager).await;
+    let read = harness.auth.user(alice.id).await.expect("read");
+    assert_eq!(read.map(|user| user.role), Some(Role::Manager));
+    assert!(
+        harness
+            .auth
+            .user(UserId::generate())
+            .await
+            .expect("read")
+            .is_none()
+    );
+    let mut ids: Vec<UserId> = harness
+        .auth
+        .users(&[root.user_id, alice.id, UserId::generate()])
+        .await
+        .expect("read")
+        .into_iter()
+        .map(|user| user.id)
+        .collect();
+    ids.sort();
+    let mut expected = vec![root.user_id, alice.id];
+    expected.sort();
+    assert_eq!(ids, expected);
+    assert!(harness.auth.users(&[]).await.expect("read").is_empty());
+}

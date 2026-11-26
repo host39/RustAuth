@@ -280,6 +280,19 @@ impl AuthService {
             .ok_or(AuthError::Unauthorized)
     }
 
+    /// An account by id, without a signed-in caller: for background work (jobs, schedulers)
+    /// that acts for a user and needs their role, disabled state, or username. `None` when the
+    /// account does not exist. Applications use this instead of reading `auth` tables.
+    pub async fn user(&self, id: UserId) -> AuthResult<Option<User>> {
+        self.ports.users.get(id).await
+    }
+
+    /// The accounts with these ids (missing ones are left out, order not kept), for job runners
+    /// that resolve many users at once.
+    pub async fn users(&self, ids: &[UserId]) -> AuthResult<Vec<User>> {
+        self.ports.users.get_many(ids).await
+    }
+
     /// Changes the caller's display name.
     pub async fn update_profile(
         &self,

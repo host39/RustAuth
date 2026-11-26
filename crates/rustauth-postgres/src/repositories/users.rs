@@ -171,6 +171,23 @@ impl UserRepository for SqlxUserRepository {
         row.map(User::try_from).transpose()
     }
 
+    async fn get_many(&self, ids: &[UserId]) -> AuthResult<Vec<User>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids: Vec<uuid::Uuid> = ids.iter().map(|id| id.as_uuid()).collect();
+        let rows: Vec<UserRow> = sqlx::query_as(concat!(
+            "SELECT ",
+            user_columns!(),
+            " FROM auth.users u WHERE u.id = ANY($1)"
+        ))
+        .bind(ids)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(internal("rustauth.users.get-many.failed"))?;
+        rows.into_iter().map(User::try_from).collect()
+    }
+
     async fn find(
         &self,
         username: &Username,

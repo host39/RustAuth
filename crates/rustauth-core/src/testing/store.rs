@@ -142,6 +142,18 @@ impl UserRepository for MemoryStore {
         Ok(self.open()?.users.get(&id).cloned())
     }
 
+    async fn get_many(&self, ids: &[UserId]) -> AuthResult<Vec<User>> {
+        let state = self.open()?;
+        let mut users: Vec<User> = state
+            .users
+            .values()
+            .filter(|user| ids.contains(&user.id))
+            .cloned()
+            .collect();
+        users.sort_by_key(|user| user.id);
+        Ok(users)
+    }
+
     async fn find(
         &self,
         username: &Username,
