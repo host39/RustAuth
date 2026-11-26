@@ -1,5 +1,11 @@
 //! The `X-Request-Id` header, echoed as `requestId` in error bodies so clients can quote it and
 //! operators can find the matching log lines.
+//!
+//! The id comes from the request header. An application middleware that generates ids for
+//! requests without one must write the id into that request header, and run before (outside)
+//! the auth router and the guard, for error bodies and `rustauth.http.*` logs to carry it.
+
+use std::future::Future;
 
 use axum::extract::Request;
 use axum::http::{HeaderMap, HeaderName};
@@ -13,7 +19,8 @@ pub const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id"
 const MAX_CHARS: usize = 128;
 
 tokio::task_local! {
-    /// The request id of the request the auth router is handling.
+    /// The request id of the request the auth router, the guard, or [`request_scope`] is
+    /// handling.
     static CURRENT: Option<String>;
 }
 
@@ -23,14 +30,21 @@ pub fn request_id(headers: &HeaderMap) -> Option<String> {
     (!value.is_empty() && value.len() <= MAX_CHARS).then(|| value.to_owned())
 }
 
-/// Layer function of the auth router: keeps the request id available to the error responses of
-/// the request's handlers and extractors.
-pub(crate) async fn scope(request: Request, next: Next) -> Response {
+/// Middleware that keeps the request id available to [`crate::HttpError`] responses of the
+/// handlers and extractors behind it, so their bodies echo it as `requestId`. The auth router
+/// and the guard apply it already; application routes without a guard can add it with
+/// `.layer(axum::middleware::from_fn(request_scope))`.
+pub async fn request_scope(request: Request, next: Next) -> Response {
     let id = request_id(request.headers());
-    CURRENT.scope(id, next.run(request)).await
+    within(id, next.run(request)).await
 }
 
-/// The request id of the request in progress, inside the auth router.
+/// Runs `future` with `id` as the request id that error responses echo.
+pub(crate) async fn within<F: Future>(id: Option<String>, future: F) -> F::Output {
+    CURRENT.scope(id, future).await
+}
+
+/// The request id of the request in progress, inside [`request_scope`] or the guard.
 pub(crate) fn current() -> Option<String> {
     CURRENT.try_with(Clone::clone).ok().flatten()
 }

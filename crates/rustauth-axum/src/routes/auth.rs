@@ -26,7 +26,7 @@ fn details<T>(data: T) -> Details<T> {
     get,
     path = "/auth/setup",
     operation_id = "rustauth_setup_status",
-    tag = "auth",
+    tag = "rustauth.auth",
     responses(
         (status = 200, description = "Setup status", body = DetailsResponse<SetupStatusResponse>),
         (status = 429, description = "Too many requests from this client (`RATE_LIMITED`)", body = ErrorResponse,
@@ -49,7 +49,7 @@ pub(crate) async fn setup(
     post,
     path = "/auth/register",
     operation_id = "rustauth_register",
-    tag = "auth",
+    tag = "rustauth.auth",
     request_body = RegisterRequest,
     responses(
         (status = 201, description = "Account created and signed in", body = DetailsResponse<SignInResponse>),
@@ -78,7 +78,7 @@ pub(crate) async fn register(
     post,
     path = "/auth/login",
     operation_id = "rustauth_login",
-    tag = "auth",
+    tag = "rustauth.auth",
     request_body = LoginRequest,
     responses(
         (status = 200, description = "Signed in", body = DetailsResponse<SignInResponse>),
@@ -105,7 +105,7 @@ pub(crate) async fn login(
     post,
     path = "/auth/logout",
     operation_id = "rustauth_logout",
-    tag = "auth",
+    tag = "rustauth.auth",
     security(("bearerAuth" = [])),
     responses(
         (status = 204, description = "Signed out"),
@@ -125,7 +125,7 @@ pub(crate) async fn logout(
     get,
     path = "/auth/me",
     operation_id = "rustauth_get_me",
-    tag = "auth",
+    tag = "rustauth.auth",
     security(("bearerAuth" = [])),
     responses(
         (status = 200, description = "The caller's account", body = DetailsResponse<UserResponse>),
@@ -145,7 +145,7 @@ pub(crate) async fn me(
     patch,
     path = "/auth/me",
     operation_id = "rustauth_update_me",
-    tag = "auth",
+    tag = "rustauth.auth",
     security(("bearerAuth" = [])),
     request_body = UpdateProfileRequest,
     responses(
@@ -169,7 +169,7 @@ pub(crate) async fn update_me(
     post,
     path = "/auth/password",
     operation_id = "rustauth_change_password",
-    tag = "auth",
+    tag = "rustauth.auth",
     security(("bearerAuth" = [])),
     request_body = ChangePasswordRequest,
     responses(
@@ -199,7 +199,7 @@ pub(crate) async fn change_password(
     get,
     path = "/auth/sessions",
     operation_id = "rustauth_list_sessions",
-    tag = "auth",
+    tag = "rustauth.auth",
     security(("bearerAuth" = [])),
     responses(
         (status = 200, description = "Active sessions; `current` marks this one", body = ListResponse<SessionResponse>),
@@ -226,7 +226,7 @@ pub(crate) async fn sessions(
     delete,
     path = "/auth/sessions/{id}",
     operation_id = "rustauth_revoke_session",
-    tag = "auth",
+    tag = "rustauth.auth",
     security(("bearerAuth" = [])),
     params(("id" = Uuid, Path, description = "Session id")),
     responses(
@@ -250,7 +250,7 @@ pub(crate) async fn revoke(
     post,
     path = "/auth/sessions/revoke-others",
     operation_id = "rustauth_revoke_other_sessions",
-    tag = "auth",
+    tag = "rustauth.auth",
     security(("bearerAuth" = [])),
     responses(
         (status = 204, description = "Other sessions revoked"),

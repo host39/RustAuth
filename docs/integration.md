@@ -144,9 +144,10 @@ let app = router.with_state(AppState { pool });
 axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
 ```
 
-- `auth.router::<S>()` works with any application state `S`: the auth routes carry their own state. Their schemas are named `rustauth.*` and their operation ids `rustauth_*`, so they join the application's OpenAPI document without collisions. The signed-in routes use the `bearerAuth` security scheme (`rustauth::SECURITY_SCHEME`); list it on the application's guarded routes too: `security(("bearerAuth" = []))`.
+- `auth.router::<S>()` works with any application state `S`: the auth routes carry their own state. Their schemas are named `rustauth.*`, their operation ids `rustauth_*`, and their tags `rustauth.auth` and `rustauth.admin` (`rustauth::AUTH_TAG`, `rustauth::ADMIN_TAG`), so they join the application's OpenAPI document without collisions. The signed-in routes use the `bearerAuth` security scheme (`rustauth::SECURITY_SCHEME`); list it on the application's guarded routes too: `security(("bearerAuth" = []))`.
 - `auth.guard()` loads the session and user on every request, so a disabled account or a revoked session loses access at once. `auth.guard().optional()` also lets anonymous requests through, for routes that read the caller with `OptionalAuthUser`.
 - Without `into_make_service_with_connect_info`, per-IP limits are off and `rustauth.client.peer-unknown` is logged once.
+- Error bodies echo the `X-Request-Id` request header as `requestId`, and `rustauth.http.*` logs carry it as `request_id`. An application middleware that generates ids for requests without one must write the id into that request header (not only into a request extension or its own task-local) and run outside the auth router and the guard, for example as the outermost layer.
 - A web app on another origin needs CORS that allows the `Authorization` and `Content-Type` request headers. Bodies of `429` responses repeat `Retry-After` as `details.retryAfterSecs`, so the header need not be exposed.
 - Delete expired sessions, and the sign-in failure records of usernames without an account that no longer count, now and then with `auth.service().purge()`:
 
@@ -169,7 +170,7 @@ fn purge_hourly(auth: &RustAuth) {
 
 Services and `AuthUser::require` fail with `AuthError`. It is `#[non_exhaustive]`: match with a wildcard arm and fall back on `error.code()`.
 
-The simplest mapping wraps `HttpError`, which answers exactly like the auth routes (status, error body, `Retry-After`, `WWW-Authenticate: Bearer`, and the `rustauth.http.*` log line):
+The simplest mapping wraps `HttpError`, which answers like the auth routes (status, error body, `Retry-After`, `WWW-Authenticate: Bearer`, and the `rustauth.http.*` log line). Its body echoes the request id as `requestId` in handlers behind `auth.guard()`; for application routes without a guard, add `.layer(axum::middleware::from_fn(rustauth::request_scope))` (see the request id note in step 5):
 
 ```rust
 //! The application's rustauth adapter module.

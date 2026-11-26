@@ -1,12 +1,16 @@
 //! The auth router merged into an application router with its own state, the guard on the
 //! application's routes, and the merged OpenAPI document.
 
+use std::io;
+use std::sync::{Arc, Mutex};
+
 use axum::Router;
 use axum::extract::State;
 use axum::http::StatusCode;
-use rustauth_axum::{AuthUser, OptionalAuthUser, router};
+use rustauth_axum::{AuthUser, OptionalAuthUser, request_scope, router};
 use rustauth_core::{AuthError, Role};
 use serde_json::json;
+use tracing_subscriber::fmt::MakeWriter;
 use utoipa::OpenApi;
 use utoipa::openapi::OpenApi as Document;
 use utoipa_axum::router::OpenApiRouter;
@@ -21,7 +25,13 @@ struct AppState {
 }
 
 #[derive(OpenApi)]
-#[openapi(info(title = "example-app", version = "1.0.0"))]
+#[openapi(
+    info(title = "example-app", version = "1.0.0"),
+    tags(
+        (name = "auth", description = "The application's own sign-in pages"),
+        (name = "admin", description = "The application's own administration"),
+    )
+)]
 struct ApiDoc;
 
 /// A widget route of the application: needs a signed-in user and the application's state.
@@ -49,6 +59,11 @@ async fn unguarded(user: AuthUser) -> String {
     user.username.to_string()
 }
 
+/// A public route of the application that answers with a rustauth error.
+async fn public() -> Result<&'static str, rustauth_axum::HttpError> {
+    Err(AuthError::validation("widget", "Widget name is required.").into())
+}
+
 /// The documented integration: the auth routes and the guarded application routes under `/api`.
 fn application(app: &App) -> (Router, Document) {
     let guarded = OpenApiRouter::<AppState>::new()
@@ -68,7 +83,12 @@ fn application(app: &App) -> (Router, Document) {
                 .merge(guarded)
                 .merge(optional)
                 .merge(managers)
-                .route("/unguarded", axum::routing::get(unguarded)),
+                .route("/unguarded", axum::routing::get(unguarded))
+                .merge(
+                    OpenApiRouter::<AppState>::new()
+                        .route("/public", axum::routing::get(public))
+                        .layer(axum::middleware::from_fn(request_scope)),
+                ),
         )
         .split_for_parts();
     (router.with_state(AppState { greeting: "hello" }), document)
@@ -185,9 +205,54 @@ async fn the_extractor_without_a_guard_is_a_server_error() {
     let app = App::start().await;
     let (router, _) = application(&app);
     let token = app.root().await;
-    send(&router, get("/api/unguarded").token(&token))
+    let capture = Capture::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(capture.clone())
+        .with_ansi(false)
+        .finish();
+    let reply = {
+        let _guard = tracing::subscriber::set_default(subscriber);
+        send(
+            &router,
+            get("/api/unguarded")
+                .token(&token)
+                .header("x-request-id", "req-wiring"),
+        )
         .await
-        .assert_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR");
+    };
+    reply.assert_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR");
+    assert_eq!(reply.body["requestId"], "req-wiring");
+    // Operators filter on the key the docs name, as the message of its own line.
+    let logs = capture.text();
+    let line = logs
+        .lines()
+        .find(|line| line.contains(": rustauth.guard.missing"))
+        .unwrap_or_else(|| panic!("no rustauth.guard.missing message in {logs}"));
+    assert!(line.contains("ERROR"), "{line}");
+    assert!(line.contains("req-wiring"), "{line}");
+}
+
+#[tokio::test]
+async fn handler_errors_behind_the_guard_echo_the_request_id() {
+    let app = App::start().await;
+    let (router, _) = application(&app);
+    let root = app.root().await;
+    app.create(&root, "alice", "user").await;
+    let user = app.login("alice").await;
+    // `user.require(Role::Manager)?` in the handler, not the guard.
+    let reply = send(
+        &router,
+        get("/api/reports")
+            .token(&user)
+            .header("x-request-id", "req-42"),
+    )
+    .await;
+    reply.assert_error(StatusCode::FORBIDDEN, "FORBIDDEN");
+    assert_eq!(reply.body["requestId"], "req-42");
+    // An application route without a guard gets the id from `request_scope`.
+    let public = send(&router, get("/api/public").header("x-request-id", "req-43")).await;
+    public.assert_error(StatusCode::BAD_REQUEST, "VALIDATION_ERROR");
+    assert_eq!(public.body["requestId"], "req-43");
 }
 
 #[tokio::test]
@@ -260,6 +325,69 @@ async fn the_document_holds_both_route_sets_with_namespaced_schemas() {
     let login = &json["paths"]["/api/auth/login"]["post"];
     assert!(login.get("security").is_none());
     assert!(login["responses"]["429"]["headers"]["Retry-After"].is_object());
+
+    // The application's own `auth` and `admin` tags stay apart from the library's.
+    let tags: Vec<&str> = json["tags"]
+        .as_array()
+        .expect("tags")
+        .iter()
+        .map(|tag| tag["name"].as_str().expect("tag name"))
+        .collect();
+    let unique: std::collections::BTreeSet<&str> = tags.iter().copied().collect();
+    assert_eq!(unique.len(), tags.len(), "{tags:?}");
+    for name in [
+        "auth",
+        "admin",
+        rustauth_axum::AUTH_TAG,
+        rustauth_axum::ADMIN_TAG,
+    ] {
+        assert!(tags.contains(&name), "{name} missing from {tags:?}");
+    }
+    let operation_tags: std::collections::BTreeSet<&str> = json["paths"]
+        .as_object()
+        .expect("paths")
+        .iter()
+        .filter(|(path, _)| path.starts_with("/api/auth") || path.starts_with("/api/admin"))
+        .flat_map(|(_, item)| item.as_object().expect("path item").values())
+        .flat_map(|operation| operation["tags"].as_array().expect("operation tags"))
+        .map(|tag| tag.as_str().expect("tag"))
+        .collect();
+    assert_eq!(
+        operation_tags,
+        [rustauth_axum::ADMIN_TAG, rustauth_axum::AUTH_TAG].into()
+    );
+}
+
+/// Log output captured by a test subscriber.
+#[derive(Clone, Default)]
+struct Capture(Arc<Mutex<Vec<u8>>>);
+
+impl Capture {
+    fn text(&self) -> String {
+        String::from_utf8(self.0.lock().expect("capture lock").clone()).expect("utf-8 logs")
+    }
+}
+
+impl io::Write for Capture {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0
+            .lock()
+            .expect("capture lock")
+            .extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> MakeWriter<'a> for Capture {
+    type Writer = Capture;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
 }
 
 #[test]

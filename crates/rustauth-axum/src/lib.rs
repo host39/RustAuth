@@ -25,6 +25,6 @@ pub use crate::error::HttpError;
 pub use crate::extract::{AuthUser, JsonBody, OptionalAuthUser, QueryParams};
 pub use crate::guard::{Guard, GuardService};
 pub use crate::ip::{client_info, client_ip};
-pub use crate::request_id::{REQUEST_ID_HEADER, request_id};
-pub use crate::routes::{SECURITY_SCHEME, router};
+pub use crate::request_id::{REQUEST_ID_HEADER, request_id, request_scope};
+pub use crate::routes::{ADMIN_TAG, AUTH_TAG, SECURITY_SCHEME, router};
 pub use crate::state::AuthState;

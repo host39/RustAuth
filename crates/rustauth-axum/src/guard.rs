@@ -17,7 +17,7 @@ use tower::{Layer, Service};
 
 use crate::error::HttpError;
 use crate::extract::{AuthUser, Guarded};
-use crate::request_id::request_id;
+use crate::request_id::{request_id, within};
 
 /// Longest bearer token read; issued tokens have 43 characters.
 const MAX_TOKEN_CHARS: usize = 512;
@@ -40,7 +40,8 @@ const MAX_TOKEN_CHARS: usize = 512;
 ///   [`Guard::require`] it answers `403` (`FORBIDDEN`), both with the shared error body.
 /// - The session and user are loaded on every request, so a disabled user or a revoked session
 ///   loses access at once. A request an outer guard already verified is not verified again.
-/// - Handlers read the caller with the [`AuthUser`] or `OptionalAuthUser` extractor.
+/// - Handlers read the caller with the [`AuthUser`] or `OptionalAuthUser` extractor, and their
+///   [`HttpError`] responses echo the `X-Request-Id` header as `requestId`.
 #[derive(Clone)]
 pub struct Guard {
     auth: Arc<AuthService>,
@@ -155,6 +156,7 @@ where
         let mut inner = std::mem::replace(&mut self.inner, clone);
         let guard = self.guard.clone();
         Box::pin(async move {
+            let id = request_id(request.headers());
             let verified = request.extensions().get::<AuthUser>().cloned();
             match guard.check(verified, request.headers()).await {
                 Ok(user) => {
@@ -162,11 +164,12 @@ where
                     if let Some(user) = user {
                         request.extensions_mut().insert(user);
                     }
-                    inner.call(request).await.map(IntoResponse::into_response)
+                    // `HttpError` responses of the handlers behind the guard echo the id too.
+                    within(id, inner.call(request))
+                        .await
+                        .map(IntoResponse::into_response)
                 }
-                Err(error) => Ok(HttpError::from(error)
-                    .with_request_id(request_id(request.headers()))
-                    .into_response()),
+                Err(error) => Ok(HttpError::from(error).with_request_id(id).into_response()),
             }
         })
     }

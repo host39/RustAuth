@@ -68,8 +68,8 @@ pub use rustauth_core::{
 
 #[cfg(feature = "axum")]
 pub use rustauth_axum::{
-    AuthUser, Guard, GuardService, HttpError, JsonBody, OptionalAuthUser, QueryParams,
-    REQUEST_ID_HEADER, SECURITY_SCHEME, client_ip,
+    ADMIN_TAG, AUTH_TAG, AuthUser, Guard, GuardService, HttpError, JsonBody, OptionalAuthUser,
+    QueryParams, REQUEST_ID_HEADER, SECURITY_SCHEME, client_ip, request_scope,
 };
 
 #[cfg(feature = "postgres")]

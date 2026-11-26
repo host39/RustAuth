@@ -29,6 +29,8 @@ http-body-util = { workspace = true }
 rustauth-core = { workspace = true, features = ["testing"] }
 tokio = { workspace = true, features = ["macros", "rt"] }
 tower = { workspace = true, features = ["util"] }
+# Captures log lines in tests.
+tracing-subscriber = { workspace = true, features = ["fmt"] }
 
 [lints]
 workspace = true

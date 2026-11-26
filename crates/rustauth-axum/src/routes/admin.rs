@@ -26,7 +26,7 @@ fn details<T>(data: T) -> Details<T> {
     get,
     path = "/admin/users",
     operation_id = "rustauth_list_users",
-    tag = "admin",
+    tag = "rustauth.admin",
     security(("bearerAuth" = [])),
     params(ListUsersQuery),
     responses(
@@ -57,7 +57,7 @@ pub(crate) async fn list(
     post,
     path = "/admin/users",
     operation_id = "rustauth_create_user",
-    tag = "admin",
+    tag = "rustauth.admin",
     security(("bearerAuth" = [])),
     request_body = CreateUserRequest,
     responses(
@@ -88,7 +88,7 @@ pub(crate) async fn create(
     get,
     path = "/admin/users/{id}",
     operation_id = "rustauth_get_user",
-    tag = "admin",
+    tag = "rustauth.admin",
     security(("bearerAuth" = [])),
     params(("id" = Uuid, Path, description = "User id")),
     responses(
@@ -114,7 +114,7 @@ pub(crate) async fn get(
     patch,
     path = "/admin/users/{id}",
     operation_id = "rustauth_update_user",
-    tag = "admin",
+    tag = "rustauth.admin",
     security(("bearerAuth" = [])),
     params(("id" = Uuid, Path, description = "User id")),
     request_body = UpdateUserRequest,
@@ -158,7 +158,7 @@ pub(crate) async fn update(
     post,
     path = "/admin/users/{id}/unlock",
     operation_id = "rustauth_unlock_user",
-    tag = "admin",
+    tag = "rustauth.admin",
     security(("bearerAuth" = [])),
     params(("id" = Uuid, Path, description = "User id")),
     responses(
@@ -184,7 +184,7 @@ pub(crate) async fn unlock(
     delete,
     path = "/admin/users/{id}",
     operation_id = "rustauth_delete_user",
-    tag = "admin",
+    tag = "rustauth.admin",
     security(("bearerAuth" = [])),
     params(("id" = Uuid, Path, description = "User id")),
     responses(

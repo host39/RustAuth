@@ -75,12 +75,10 @@ impl<S: Send + Sync> FromRequestParts<S> for AuthUser {
         if let Some(user) = parts.extensions.get::<AuthUser>() {
             return Ok(user.clone());
         }
-        let error = if parts.extensions.get::<Guarded>().is_some() {
-            AuthError::Unauthorized
-        } else {
-            missing_guard()
-        };
-        Err(HttpError::from(error).with_request_id(request_id(&parts.headers)))
+        if parts.extensions.get::<Guarded>().is_none() {
+            return Err(missing_guard(parts));
+        }
+        Err(HttpError::from(AuthError::Unauthorized).with_request_id(request_id(&parts.headers)))
     }
 }
 
@@ -94,9 +92,7 @@ impl<S: Send + Sync> FromRequestParts<S> for OptionalAuthUser {
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         if parts.extensions.get::<Guarded>().is_none() {
-            return Err(
-                HttpError::from(missing_guard()).with_request_id(request_id(&parts.headers))
-            );
+            return Err(missing_guard(parts));
         }
         Ok(Self(parts.extensions.get::<AuthUser>().cloned()))
     }
@@ -107,11 +103,20 @@ impl<S: Send + Sync> FromRequestParts<S> for OptionalAuthUser {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Guarded;
 
-fn missing_guard() -> AuthError {
-    AuthError::internal(
+/// The answer to an extractor on a route without a guard: a wiring mistake, logged as
+/// `rustauth.guard.missing` and answered `500`.
+fn missing_guard(parts: &Parts) -> HttpError {
+    let request_id = request_id(&parts.headers);
+    tracing::error!(
+        request_id,
+        path = parts.uri.path(),
+        "rustauth.guard.missing"
+    );
+    let error = AuthError::internal(
         "rustauth.guard.missing",
         "AuthUser and OptionalAuthUser need the rustauth guard layer in front of the route",
-    )
+    );
+    HttpError::from(error).with_request_id(request_id)
 }
 
 /// JSON request body. Malformed JSON or missing fields answer `400` (`VALIDATION_ERROR`, field

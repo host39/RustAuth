@@ -27,7 +27,7 @@ use utoipa_axum::routes;
 
 use crate::error::HttpError;
 use crate::ip::client_info;
-use crate::request_id::scope;
+use crate::request_id::request_scope;
 use crate::state::AuthState;
 
 /// Name of the OpenAPI security scheme (`Authorization: Bearer <token>`) the signed-in routes
@@ -70,7 +70,7 @@ where
     let mut router = public
         .merge(signed_in)
         .merge(admin)
-        .layer(middleware::from_fn(scope));
+        .layer(middleware::from_fn(request_scope));
     document(router.get_openapi_mut());
     router.with_state(state)
 }
@@ -83,6 +83,13 @@ async fn limit(State(state): State<AuthState>, request: Request, next: Next) -> 
         Err(error) => HttpError::from(error).into_response(),
     }
 }
+
+/// OpenAPI tag of the setup, sign-in, and own-account routes. Namespaced like the schemas, so it
+/// cannot merge with a tag of the application's document.
+pub const AUTH_TAG: &str = "rustauth.auth";
+
+/// OpenAPI tag of the account administration routes.
+pub const ADMIN_TAG: &str = "rustauth.admin";
 
 /// Adds the bearer security scheme and the tag descriptions.
 fn document(openapi: &mut OpenApi) {
@@ -102,13 +109,13 @@ fn document(openapi: &mut OpenApi) {
         );
     openapi.tags = Some(vec![
         TagBuilder::new()
-            .name("auth")
+            .name(AUTH_TAG)
             .description(Some(
                 "RustAuth: setup, registration, sign-in, and the caller's account and sessions.",
             ))
             .build(),
         TagBuilder::new()
-            .name("admin")
+            .name(ADMIN_TAG)
             .description(Some(
                 "RustAuth: account administration (administrators only).",
             ))

@@ -60,7 +60,7 @@ async fn delete_widget(user: AuthUser) -> Result<StatusCode, AppError> {
 }
 ```
 
-- `auth.router::<S>()` works with any application state `S`; the auth routes carry their own. Schemas are named `rustauth.*`, operation ids `rustauth_*`, and signed-in routes use the `bearerAuth` security scheme, which your guarded routes can list too.
+- `auth.router::<S>()` works with any application state `S`; the auth routes carry their own. Schemas are named `rustauth.*`, operation ids `rustauth_*`, tags `rustauth.auth` and `rustauth.admin`, and signed-in routes use the `bearerAuth` security scheme, which your guarded routes can list too.
 - `auth.guard()` loads the session and user on every request, so a disabled user or revoked session loses access at once. `auth.guard().require(Role::Manager)` answers `403` below a role, and `auth.guard().optional()` also lets anonymous requests through (read the caller with `OptionalAuthUser`).
 - `AuthUser` used on a route without a guard answers `500` and logs `rustauth.guard.missing`, so a wiring mistake shows at once.
 - `build()` refuses to start when `auth` migrations are pending ("Auth schema is out of date: run migrations") or when the database is newer than the library (unless `allow_newer_schema(true)`).
