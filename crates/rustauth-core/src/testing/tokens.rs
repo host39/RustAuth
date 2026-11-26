@@ -31,11 +31,11 @@ impl TokenIssuer for FakeTokens {
     /// Four seeded SipHash runs (fixed keys, so stable within a build) fill the 32 bytes.
     fn hash(&self, token: &str) -> TokenHash {
         let mut bytes = [0u8; TokenHash::LEN];
-        for (seed, chunk) in bytes.chunks_exact_mut(8).enumerate() {
+        for (seed, chunk) in bytes.as_chunks_mut::<8>().0.iter_mut().enumerate() {
             let mut hasher = DefaultHasher::new();
             seed.hash(&mut hasher);
             token.hash(&mut hasher);
-            chunk.copy_from_slice(&hasher.finish().to_le_bytes());
+            *chunk = hasher.finish().to_le_bytes();
         }
         TokenHash::new(bytes)
     }
