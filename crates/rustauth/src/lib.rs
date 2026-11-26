@@ -5,22 +5,45 @@
 //! any release. It holds [`RustAuth::builder()`], which wires the crypto and Postgres adapters
 //! into the core services, [`migrate`], and the types applications use, re-exported by name.
 //!
-//! ```ignore
-//! use rustauth::{AuthConfig, AuthUser, Role, RustAuth};
+//! ```no_run
+//! use std::collections::HashMap;
+//! use std::net::SocketAddr;
 //!
+//! use rustauth::{AuthConfig, AuthUser, HttpError, Role, RustAuth};
+//! use utoipa_axum::router::OpenApiRouter;
+//!
+//! #[derive(Clone)]
+//! struct AppState;
+//!
+//! async fn delete_widget(user: AuthUser) -> Result<&'static str, HttpError> {
+//!     user.require(Role::Manager)?; // 403 below manager
+//!     Ok("deleted")
+//! }
+//!
+//! # async fn example(pool: sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>> {
 //! // In the migrate step: the `auth` schema first, then the application's own migrations.
 //! rustauth::migrate(&pool).await?;
 //!
+//! let env: HashMap<String, String> = std::env::vars().collect();
 //! let auth = RustAuth::builder()
 //!     .pool(pool.clone())
-//!     .config(AuthConfig::parse(&std::env::vars().collect())?)
+//!     .config(AuthConfig::parse(&env)?)
 //!     .build()
 //!     .await?;
 //!
-//! let (router, openapi) = OpenApiRouter::<AppState>::new()
-//!     .nest("/api", auth.router().merge(widget_routes.layer(auth.guard())))
+//! let widgets = OpenApiRouter::<AppState>::new()
+//!     .route("/widgets/{id}", axum::routing::delete(delete_widget))
+//!     .layer(auth.guard());
+//! let (router, _openapi) = OpenApiRouter::<AppState>::new()
+//!     .nest("/api", auth.router().merge(widgets))
 //!     .split_for_parts();
-//! let app = router.with_state(app_state);
+//! let app = router.with_state(AppState);
+//!
+//! // The peer address feeds the per-IP limits and `AUTH_TRUSTED_PROXIES`.
+//! let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await?;
+//! axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! Features:

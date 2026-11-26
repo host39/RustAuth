@@ -36,13 +36,19 @@ pub enum BuildError {
 /// The configured library: the core services plus the HTTP router and guard (feature `axum`).
 /// Cheap to clone; every clone shares the services and their in-memory limiters.
 ///
-/// ```ignore
+/// ```no_run
+/// # use std::collections::HashMap;
+/// # use rustauth::{AuthConfig, RustAuth};
+/// # async fn example(pool: sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>> {
 /// rustauth::migrate(&pool).await?;
+/// let env: HashMap<String, String> = std::env::vars().collect();
 /// let auth = RustAuth::builder()
 ///     .pool(pool.clone())
-///     .config(AuthConfig::parse(&std::env::vars().collect())?)
+///     .config(AuthConfig::parse(&env)?)
 ///     .build()
 ///     .await?;
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Clone)]
 pub struct RustAuth {

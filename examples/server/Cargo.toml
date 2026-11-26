@@ -11,13 +11,20 @@ repository.workspace = true
 [dependencies]
 axum = { workspace = true }
 rustauth = { workspace = true }
+serde = { workspace = true }
 # The application owns the pool, so it picks the TLS backend (rustls with ring, like the template).
 sqlx = { workspace = true, features = ["postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+utoipa = { workspace = true }
+utoipa-axum = { workspace = true }
 
 [dev-dependencies]
+http-body-util = { workspace = true }
+# The facade's in-memory fakes, so the tests need no database.
+rustauth = { workspace = true, features = ["testing"] }
+serde_json = { workspace = true }
 tower = { workspace = true, features = ["util"] }
 
 [lints]

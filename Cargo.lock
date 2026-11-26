@@ -371,12 +371,17 @@ name = "example-server"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "http-body-util",
  "rustauth",
+ "serde",
+ "serde_json",
  "sqlx",
  "tokio",
  "tower",
  "tracing",
  "tracing-subscriber",
+ "utoipa",
+ "utoipa-axum",
 ]
 
 [[package]]

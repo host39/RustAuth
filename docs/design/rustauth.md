@@ -48,7 +48,7 @@ lib-rustauth/
     rustauth-postgres/        sqlx repositories + migrations in schema `auth`
     rustauth-contracts/       DTOs (serde + utoipa; optional ts-rs under the `ts` feature)
     rustauth-axum/            router, guard layer, extractors, HTTP error mapping
-    rustauth/                 facade: re-exports + `RustAuth::builder()`; features `postgres`, `axum`
+    rustauth/                 facade: re-exports + `RustAuth::builder()`; features `postgres`, `axum`, `testing`, `ts`
   packages/contracts/         npm package `@rustauth/contracts`: generated TS types + Zod schemas
   examples/server/            minimal axum app using the facade (docs and smoke tests)
   docs/                       design, ADRs, integration guide
@@ -265,23 +265,28 @@ A separate table so that SSO-only users later need no password row.
 ### Integration Shape
 
 ```rust
+rustauth::migrate(&pool).await?;        // in the migrate step, before the application's migrations
+
 let auth = RustAuth::builder()
     .pool(pool.clone())
     .config(AuthConfig::parse(&env)?)   // or build AuthConfig by hand
-    .build()?;                          // wires crypto + postgres adapters into core services
+    .build()                            // checks the schema, wires crypto + postgres into core services
+    .await?;                            // async: the service counts accounts and prepares its dummy hash
 
-let app = Router::new()
-    .nest("/api", auth.router()          // public + self-protected auth routes, OpenAPI documented
+let (router, openapi) = OpenApiRouter::<AppState>::new()
+    .nest("/api", auth.router()         // public + self-protected auth routes, OpenAPI documented
         .merge(app_routes.layer(auth.guard())))   // guard: 401 unless a valid bearer token
-    .with_state(app_state);
+    .split_for_parts();
+let app = router.with_state(app_state);
+axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
 
 async fn handler(user: AuthUser) -> ... { user.require(Role::Administrator)?; ... }
 ```
 
-- `auth.router()` returns a `utoipa_axum::router::OpenApiRouter` with its state already applied, so applications merge it into their own router and OpenAPI document.
-- `auth.guard()` is a layer: it reads `Authorization: Bearer`, calls `AuthService::verify`, and inserts `AuthUser` (wrapping `Principal`) into request extensions; otherwise it answers `401` with the error body.
-- `AuthUser` and `OptionalAuthUser` are extractors. `RequireRole<const R>` or `AuthUser::require(role)` enforce roles.
-- Client IP: the peer address from `ConnectInfo`, or the left-most untrusted `X-Forwarded-For` hop when the peer is in `trusted_proxies`.
+- `auth.router::<S>()` returns a `utoipa_axum::router::OpenApiRouter<S>` for any application state `S`: the routes run on their own state (applied with `with_state`), so applications merge them into their own router and OpenAPI document without adding the auth services to their state. Schemas are named `rustauth.*` and operation ids `rustauth_*`, so they cannot collide with the application's; the signed-in routes use the `bearerAuth` security scheme.
+- `auth.guard()` is a `tower` layer: it reads `Authorization: Bearer`, calls `AuthService::verify`, and inserts `AuthUser` (wrapping `Principal`) into request extensions; otherwise it answers `401` with the error body. `auth.guard().require(Role::Manager)` answers `403` below a role; `auth.guard().optional()` also admits anonymous requests and stale tokens (but not storage failures). A request an outer guard verified is not verified again.
+- `AuthUser` and `OptionalAuthUser` are extractors; `AuthUser::require(role)` checks a role in a handler. Used on a route without a guard in front, they answer `500` and log `rustauth.guard.missing`. (`RequireRole<const R>` would need const generics over an enum, which stable Rust lacks; the guard's `require` covers it.)
+- Client IP: the peer address from `ConnectInfo<SocketAddr>` (so the server must run with `into_make_service_with_connect_info`; without it per-IP limits are off and `rustauth.client.peer-unknown` is logged once). When the peer is in `trusted_proxies`, the `X-Forwarded-For` hops are read from the right (nearest proxy first) while they are trusted proxies too; the first untrusted hop is the client, or the left-most hop when all are trusted. Hops left of the first untrusted one are ignored, because the client could have written them.
 
 ### Routes
 
@@ -301,11 +306,12 @@ Relative to where the application mounts the router (for example `/api`):
 | `POST /auth/sessions/revoke-others` | user | `204` |
 | `GET /admin/users` | administrator | paginated list |
 | `POST /admin/users` | administrator | `username`, `displayName`, `temporaryPassword`, `role` |
+| `GET /admin/users/{id}` | administrator | one account |
 | `PATCH /admin/users/{id}` | administrator | `displayName`, `role`, `disabled`, `password` (a reset also unlocks) |
 | `POST /admin/users/{id}/unlock` | administrator | clears the lockout; `204` |
 | `DELETE /admin/users/{id}` | administrator | `204` |
 
-Error bodies use the same envelope as the RustInit template so applications can parse one shape: `{ "error": "<message>", "code": "<CODE>", "details": {...}, "requestId": "<id>" }`. `requestId` comes from the `X-Request-Id` request header when present.
+Bodies use the same envelopes as the RustInit template so applications parse one shape: `{ "data": ... }` for single results (`201` for register and admin create), `{ "items": [...], "total": n }` for lists, an empty `204` for revocations, unlock, and delete. Error bodies: `{ "error": "<message>", "code": "<CODE>", "field": "<name>", "details": {...}, "requestId": "<id>" }`, where `field` names the invalid input on `400`, `details.retryAfterSecs` repeats `Retry-After` on `429` (browsers cannot read that header across origins unless it is exposed), `details.entityName` names what was not found on `404`, and `401` responses carry `WWW-Authenticate: Bearer`. `requestId` comes from the `X-Request-Id` request header when present. Malformed JSON answers `400 VALIDATION_ERROR` (field `body`), an oversized body `413 PAYLOAD_TOO_LARGE`, and a missing JSON content type `415 UNSUPPORTED_MEDIA_TYPE`.
 
 ### Configuration
 
@@ -328,7 +334,7 @@ Validation: numbers are whole and at least 1; session lifetimes are at most 3650
 
 ## Contracts
 
-`rustauth-contracts` holds the request and response DTOs (camelCase JSON) with `utoipa::ToSchema`. Under the `ts` feature they derive `ts_rs::TS` so applications can export them into their own generated TypeScript. The repository also ships `packages/contracts` (`@rustauth/contracts`): the generated types plus Zod schemas that `satisfies` them, for web apps that install it from git.
+`rustauth-contracts` holds the request and response DTOs (camelCase JSON, RFC 3339 timestamps, UUID ids) with `utoipa::ToSchema`, the template's `DetailsResponse<T>` and `ListResponse<T>` envelopes, and `ErrorResponse`. OpenAPI schema names carry a `rustauth.` prefix. Types that hold a password or token print `***` in `Debug`. Under the `ts` feature they derive `ts_rs::TS` so applications can export them into their own generated TypeScript; the facade re-exports them as `rustauth::contracts::*`. The repository also ships `packages/contracts` (`@rustauth/contracts`): the generated types plus Zod schemas that `satisfies` them, the envelope helpers, route paths, and error codes, for web apps that install it from git.
 
 ## Security Notes
 
@@ -342,7 +348,8 @@ Validation: numbers are whole and at least 1; session lifetimes are at most 3650
 
 - Core: unit tests with in-memory fakes (behind a `testing` feature) for every service rule: setup token, first-admin, closed registration, throttling windows, sliding and absolute expiry, disabled users, last-administrator guard, session revocation on changes.
 - Postgres: `#[sqlx::test]` tests (ignored unless Postgres is available, `make test-db`) for the repositories, including two concurrent first registrations where exactly one becomes administrator.
-- Axum: route tests with `tower::ServiceExt::oneshot` against an in-memory service stack, and end-to-end tests against Postgres.
+- Axum: route tests with `tower::ServiceExt::oneshot` against an in-memory service stack, and end-to-end tests against Postgres through the facade.
+- Applications: the facade's `testing` feature re-exports the in-memory fakes, so `RustAuth::builder().ports(Fakes::new().ports())` builds the real router and guard without a database.
 - CI: a slim lint job (`ubuntu-slim`) and a Rust plus Postgres job (`ubuntu-latest`).
 
 ## Upgrades and Compatibility
@@ -365,7 +372,7 @@ The library is developed and released on its own schedule. New features (for exa
 - Embedded in the crate and tracked in `auth._sqlx_migrations`, separate from the application's own history. Applications call `rustauth::migrate(&pool)` first, then their own migrations, in their single migrate step. Upgrading the library and running that step applies the new auth migrations automatically.
 - Append-only once released: a released migration file never changes (sqlx checksums it).
 - Expand, then contract. A change that would break the previous release (rename, drop, new NOT NULL column without a default) ships in two releases: first add the new shape and keep the old one working, then remove the old shape in a later release. So a rolling deploy, where the old app version still runs against the new schema for a few minutes, keeps working. The changelog says when a release must not be skipped.
-- **Schema check at startup.** `RustAuth::build()` compares the applied `auth` migrations with the embedded ones. Pending migrations: build fails with "Auth schema is out of date: run migrations". Applied migrations the library does not know (the database is newer than the code, for example after a rollback): build fails with "Auth schema is newer than this version of rustauth" unless the application opts in with `allow_newer_schema(true)`, which is safe only across expand-only releases.
+- **Schema check at startup.** `RustAuth::build()` compares the applied `auth` migrations with the embedded ones (`rustauth::schema_status`). Pending migrations: build fails with "Auth schema is out of date: run migrations". Applied migrations the library does not know (the database is newer than the code, for example after a rollback): build fails with "Auth schema is newer than this version of rustauth" unless the application opts in with `allow_newer_schema(true)`, which is safe only across expand-only releases. An applied migration whose checksum differs from the embedded file always fails the build.
 
 ### Rust API
 
