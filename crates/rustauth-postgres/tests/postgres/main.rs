@@ -5,6 +5,7 @@
 //! ignored by default, so `make test` needs no database.
 
 mod migrate;
+mod newer;
 mod services;
 mod sessions;
 mod support;

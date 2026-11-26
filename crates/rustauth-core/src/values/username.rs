@@ -36,6 +36,13 @@ impl Username {
         Ok(Self(value.to_owned()))
     }
 
+    /// A username read back from storage, without the input rules: a newer release may have
+    /// relaxed them, and a stored account must keep working on an older one. Inputs go through
+    /// [`Username::new`].
+    pub fn stored(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
     /// The username as typed.
     pub fn as_str(&self) -> &str {
         &self.0
@@ -94,6 +101,11 @@ mod tests {
                 "{value}"
             );
         }
+    }
+
+    #[test]
+    fn stored_values_skip_the_input_rules() {
+        assert_eq!(Username::stored("élodie").as_str(), "élodie");
     }
 
     #[test]

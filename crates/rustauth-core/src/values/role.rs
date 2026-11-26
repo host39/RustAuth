@@ -23,6 +23,12 @@ impl Role {
     /// Every role, from highest to lowest.
     pub const ALL: [Role; 3] = [Role::Administrator, Role::Manager, Role::User];
 
+    /// A role read back from storage. A value this release does not know (written by a newer
+    /// one) reads as [`Role::User`], the least privilege, instead of failing the whole record.
+    pub fn stored(value: &str) -> Self {
+        value.parse().unwrap_or(Self::User)
+    }
+
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Administrator => "administrator",
@@ -68,6 +74,12 @@ mod tests {
             assert_eq!(role.as_str().parse::<Role>().expect("known"), role);
             assert_eq!(role.to_string(), role.as_str());
         }
+    }
+
+    #[test]
+    fn stored_unknown_roles_read_as_the_least_privilege() {
+        assert_eq!(Role::stored("manager"), Role::Manager);
+        assert_eq!(Role::stored("owner"), Role::User);
     }
 
     #[test]

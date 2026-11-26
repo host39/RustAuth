@@ -1,15 +1,19 @@
 //! Row types and their conversion into core entities.
 //!
-//! Stored values pass the same validation as new ones (`Username::new`, `Role::from_str`, ...),
-//! so a row that does not fit the domain fails with `rustauth.users.decode.failed` or
-//! `rustauth.sessions.decode.failed` instead of producing an invalid entity.
+//! Stored values are read leniently, with the `stored` constructors of core: a newer release on
+//! the same schema may write values this one does not know (a new sign-in method or assurance
+//! level, a new role, relaxed username rules), and a rolling deploy or a rollback must keep
+//! working on them. Unknown methods are skipped, an unknown assurance level reads as the lowest,
+//! and an unknown role as `user` (the least privilege). Only values no release writes, such as a
+//! malformed token hash or address, fail with `rustauth.users.decode.failed` or
+//! `rustauth.sessions.decode.failed`.
 
 use std::net::IpAddr;
 
 use chrono::{DateTime, Utc};
 use rustauth_core::{
-    AuthError, AuthResult, BoxError, DisplayName, Lockout, PasswordCredential, Session, TokenHash,
-    User, UserId, Username,
+    Assurance, AuthError, AuthMethod, AuthResult, BoxError, DisplayName, Lockout,
+    PasswordCredential, Role, Session, TokenHash, User, UserId, Username,
 };
 use uuid::Uuid;
 
@@ -91,9 +95,9 @@ impl TryFrom<UserRow> for User {
     fn try_from(row: UserRow) -> AuthResult<Self> {
         Ok(Self {
             id: UserId::from(row.id),
-            username: Username::new(&row.username).map_err(user_error)?,
-            display_name: DisplayName::new(&row.display_name).map_err(user_error)?,
-            role: row.role.parse().map_err(user_error)?,
+            username: Username::stored(row.username),
+            display_name: DisplayName::stored(row.display_name),
+            role: Role::stored(&row.role),
             disabled_at: row.disabled_at,
             created_at: row.created_at,
             updated_at: row.updated_at,
@@ -152,8 +156,8 @@ impl TryFrom<SessionRow> for Session {
         let methods = row
             .methods
             .iter()
-            .map(|method| method.parse().map_err(session_error))
-            .collect::<AuthResult<_>>()?;
+            .filter_map(|method| AuthMethod::stored(method))
+            .collect();
         let ip = row
             .ip
             .as_deref()
@@ -165,7 +169,7 @@ impl TryFrom<SessionRow> for Session {
             user_id: row.user_id.into(),
             token_hash: TokenHash::try_from(row.token_hash.as_slice()).map_err(session_error)?,
             methods,
-            assurance: row.assurance.parse().map_err(session_error)?,
+            assurance: Assurance::stored(&row.assurance),
             created_at: row.created_at,
             last_used_at: row.last_used_at,
             expires_at: row.expires_at,

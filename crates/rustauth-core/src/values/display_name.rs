@@ -35,6 +35,12 @@ impl DisplayName {
         Ok(Self(value.to_owned()))
     }
 
+    /// A display name read back from storage, without the input rules (a newer release may have
+    /// changed them). Inputs go through [`DisplayName::new`].
+    pub fn stored(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }

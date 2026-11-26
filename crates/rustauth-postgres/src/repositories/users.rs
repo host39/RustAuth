@@ -5,8 +5,8 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use rustauth_core::{
-    AuthError, AuthResult, Lockout, NewPassword, NewUser, Page, PasswordCredential, RegisterPolicy,
-    Reservation, Role, Subject, User, UserId, UserPatch, UserRepository, Username,
+    AuthError, AuthResult, DisplayName, Lockout, NewPassword, NewUser, Page, PasswordCredential,
+    RegisterPolicy, Reservation, Role, Subject, User, UserId, UserPatch, UserRepository, Username,
 };
 use sqlx::{PgConnection, PgPool};
 
@@ -219,15 +219,17 @@ impl UserRepository for SqlxUserRepository {
         let next = user.patched(patch, at);
         let others = Self::other_admins(&mut tx, id, KEY).await?;
         user.ensure_admin_remains(Some(&next), others)?;
-        // The row is locked, so writing the patched values changes only what `patch` sets.
+        // Only what `patch` sets is written: a stored value this release reads leniently (a role
+        // from a newer release reads as `user`) stays as stored unless the patch replaces it.
         let row: UserRow = sqlx::query_as(concat!(
-            "UPDATE auth.users AS u SET display_name = $2, role = $3, disabled_at = $4, ",
-            "updated_at = $5 WHERE u.id = $1 RETURNING ",
+            "UPDATE auth.users AS u SET display_name = COALESCE($2, u.display_name), ",
+            "role = COALESCE($3, u.role), disabled_at = $4, updated_at = $5 ",
+            "WHERE u.id = $1 RETURNING ",
             user_columns!()
         ))
         .bind(id.as_uuid())
-        .bind(next.display_name.as_str())
-        .bind(next.role.as_str())
+        .bind(patch.display_name.as_ref().map(DisplayName::as_str))
+        .bind(patch.role.map(|role| role.as_str()))
         .bind(next.disabled_at)
         .bind(next.updated_at)
         .fetch_one(&mut *tx)

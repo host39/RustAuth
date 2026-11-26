@@ -14,6 +14,12 @@ pub enum AuthMethod {
 }
 
 impl AuthMethod {
+    /// A method read back from storage; `None` for one this release does not know (added by a
+    /// newer one), which readers skip instead of failing the whole session.
+    pub fn stored(value: &str) -> Option<Self> {
+        value.parse().ok()
+    }
+
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Password => "password",
@@ -50,6 +56,12 @@ pub enum Assurance {
 }
 
 impl Assurance {
+    /// A level read back from storage. A level this release does not know (written by a newer
+    /// one) reads as [`Assurance::Aal1`], the lowest, instead of failing the whole session.
+    pub fn stored(value: &str) -> Self {
+        value.parse().unwrap_or(Self::Aal1)
+    }
+
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Aal1 => "aal1",
@@ -90,6 +102,14 @@ mod tests {
         assert_eq!(AuthMethod::Password.to_string(), "password");
         assert_eq!("aal1".parse::<Assurance>().expect("known"), Assurance::Aal1);
         assert_eq!(Assurance::Aal1.to_string(), "aal1");
+    }
+
+    #[test]
+    fn stored_unknown_values_read_as_the_lowest() {
+        assert_eq!(AuthMethod::stored("password"), Some(AuthMethod::Password));
+        assert_eq!(AuthMethod::stored("totp"), None);
+        assert_eq!(Assurance::stored("aal1"), Assurance::Aal1);
+        assert_eq!(Assurance::stored("aal2"), Assurance::Aal1);
     }
 
     #[test]
