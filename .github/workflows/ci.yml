@@ -111,3 +111,45 @@ jobs:
           make contracts
           git diff --exit-code -- packages/contracts/ts/generated
           test -z "$(git ls-files --others --exclude-standard -- packages/contracts/ts/generated)"
+
+  upgrade:
+    # "Upgrade Testing" in docs/design/rustauth.md: the previous release tag seeds a fresh
+    # database through its own code, then this commit migrates it, checks the sample data, and
+    # runs the Postgres test suite against it. Before the first tag it tests the harness alone
+    # and passes with a notice. See scripts/check-upgrade.sh.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: always
+      # The maintenance database; the check creates `rustauth_upgrade` next to it.
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+    services:
+      postgres:
+        image: postgres:18.1
+        env:
+          POSTGRES_DB: rustauth
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d rustauth"
+          --health-interval 2s
+          --health-retries 10
+    steps:
+      - name: Checkout with history and tags
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Upgrade from the previous release tag
+        run: make test-upgrade
