@@ -6,7 +6,11 @@ Status: draft v1 (2026-11-26). Working spec for `v0.1.0`.
 
 A reusable authentication and authorization library for the owner's Rust (axum + sqlx + Postgres) applications. An application adds the library, runs its migrations, mounts its router, and puts its guard in front of protected routes. Every application becomes a client of this library, so security fixes and new sign-in methods land once.
 
-The first consumer is Copilot (`host39/copilot`). The design follows the same clean/DDD layering as the RustInit template (`host39/template-rust-init`): domain logic in a pure core crate, adapters in their own crates, and dependency rules checked by a script.
+### Generic by Design
+
+RustAuth knows nothing about the applications that use it. Code, docs, examples, tests, table and column names, error codes, and configuration must not mention any particular application or its features. Anything application-specific (profile fields, settings, per-app permissions, product names) stays in the application, which keeps its own tables that reference `auth.users (id)`. When an application needs something new from the library, it is added here only as a general capability that any application could use. Examples use neutral names (`example`, `my-app`, `widgets`).
+
+The design follows the same clean/DDD layering as the RustInit template (`host39/template-rust-init`): domain logic in a pure core crate, adapters in their own crates, and dependency rules checked by a script.
 
 ### Scope of v0.1
 
@@ -60,7 +64,7 @@ Dependency rules (checked by `scripts/boundaries.mjs`, like the template):
 | `rustauth-contracts` | `sqlx`, `axum`, `rustauth-postgres` |
 | `rustauth-axum` | `sqlx`, `rustauth-postgres` (it talks to core services only) |
 
-Versions match the RustInit template so applications get one copy of each crate: `axum` 0.8.9, `sqlx` 0.9.1 (Postgres, rustls with ring), `utoipa` 6.0.0, `utoipa-axum` 0.3.0, `ts-rs` 12.0.1, `tokio` 1.48, `argon2` 0.6, `sha2`, `getrandom`, `chrono`, `uuid`. See `host39/copilot` `docs/research/dependencies.md` for the exact feature lines.
+Versions match the RustInit template so applications get one copy of each crate: `axum` 0.8.9, `sqlx` 0.9.1 (Postgres, rustls with ring), `utoipa` 6.0.0, `utoipa-axum` 0.3.0, `ts-rs` 12.0.1, `tokio` 1.48, `argon2` 0.6, `sha2`, `getrandom`, `chrono`, `uuid`. Keep `reqwest`-free: the library makes no outbound HTTP calls in v0.1.
 
 ## Domain Model (`rustauth-core`)
 
@@ -194,7 +198,7 @@ Tradeoff: lockout lets an attacker who knows a username lock that person out tem
 | `AccountLocked { retry_after_secs }` | 429 + `Retry-After` | `ACCOUNT_LOCKED` |
 | `Internal { key, source }` | 500 | `INTERNAL_ERROR` |
 
-Applications that have their own error type (Copilot's `DomainError`) map `AuthError` with a `From` impl in their adapter layer.
+Applications that have their own error type map `AuthError` with a `From` impl in their adapter layer.
 
 ## Storage (`rustauth-postgres`)
 
@@ -270,7 +274,7 @@ async fn handler(user: AuthUser) -> ... { user.require(Role::Administrator)?; ..
 
 ### Routes
 
-Relative to where the application mounts the router (Copilot mounts it at `/api`):
+Relative to where the application mounts the router (for example `/api`):
 
 | Route | Auth | Purpose |
 | --- | --- | --- |
@@ -364,7 +368,7 @@ The library is developed and released on its own schedule. New features (for exa
 
 ### Consumer Checklist (Applications)
 
-1. Keep all rustauth usage in one adapter module of the application (for Copilot: the API crate's auth module), which maps `AuthError` into the application's error type and `AuthUser` into the application's own actor type. An upgrade then touches one module.
+1. Keep all rustauth usage in one adapter module of the application, which maps `AuthError` into the application's error type and `AuthUser` into the application's own actor type. An upgrade then touches one module.
 2. Run `rustauth::migrate` before the application's migrations in the same migrate step and in CI.
 3. Upgrade by bumping the tag, reading the changelog's upgrade notes, running the migrate step, and running the full test suite (CI does this on the upgrade branch).
 
