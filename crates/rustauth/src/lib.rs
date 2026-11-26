@@ -116,3 +116,8 @@ pub mod testing {
 
 #[cfg(all(test, feature = "axum"))]
 mod tests;
+
+/// The README's Rust example, compiled as a doctest so it cannot drift from the facade.
+#[cfg(doctest)]
+#[doc = include_str!("../../../README.md")]
+struct ReadmeExample;

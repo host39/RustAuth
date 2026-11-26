@@ -290,7 +290,7 @@ let auth = RustAuth::builder()
     .pool(pool.clone())
     .config(AuthConfig::parse(&env)?)   // or build AuthConfig by hand
     .build()                            // checks the schema, wires crypto + postgres into core services
-    .await?;                            // async: the service counts accounts and prepares its dummy hash
+    .await?;                            // async: needs the database (schema check, account count) and prepares the dummy hash
 
 let (router, openapi) = OpenApiRouter::<AppState>::new()
     .nest("/api", auth.router()         // public + self-protected auth routes, OpenAPI documented

@@ -28,35 +28,53 @@ The [integration guide](./docs/integration.md) walks through every step: depende
 rustauth = { git = "https://github.com/host39/lib-rustauth", rev = "<commit>" } # tag = "v0.1.0" once released
 ```
 
-Run the auth migrations before your own, build the library from your pool and configuration, merge its routes into your `OpenApiRouter`, and guard your own routes:
+Run the auth migrations before your own, build the library from your pool and configuration, merge its routes into your `OpenApiRouter`, and guard your own routes (this example is compiled as a test of the `rustauth` crate, so it stays in step with the API):
 
 ```rust
-use rustauth::{AuthConfig, AuthUser, Role, RustAuth};
+use std::collections::HashMap;
+use std::net::SocketAddr;
+
+use axum::http::StatusCode;
+use rustauth::{AuthConfig, AuthUser, HttpError, Role, RustAuth};
+use utoipa::OpenApi;
 use utoipa_axum::router::OpenApiRouter;
 
-// In your migrate step: the `auth` schema first, then your own migrations.
-rustauth::migrate(&pool).await?;
+#[derive(Clone)]
+struct AppState;
 
-let auth = RustAuth::builder()
-    .pool(pool.clone())
-    .config(AuthConfig::parse(&std::env::vars().collect())?) // or AuthConfig::builder()
-    .build() // checks the `auth` schema, wires the crypto and Postgres adapters
-    .await?;
+#[derive(OpenApi)]
+#[openapi(info(title = "my-app", version = "1.0.0"))]
+struct ApiDoc;
 
-let widgets = OpenApiRouter::<AppState>::new()
-    .routes(routes!(list_widgets, delete_widget))
-    .layer(auth.guard()); // 401 unless a valid bearer token
-let (router, openapi) = OpenApiRouter::<AppState>::with_openapi(ApiDoc::openapi())
-    .nest("/api", auth.router().merge(widgets)) // auth routes join your OpenAPI document
-    .split_for_parts();
-let app = router.with_state(app_state);
+async fn serve(pool: sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>> {
+    // In your migrate step: the `auth` schema first, then your own migrations.
+    rustauth::migrate(&pool).await?;
 
-// Serve with the peer address, so per-IP limits and AUTH_TRUSTED_PROXIES work.
-axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
+    let env: HashMap<String, String> = std::env::vars().collect();
+    let auth = RustAuth::builder()
+        .pool(pool.clone())
+        .config(AuthConfig::parse(&env)?) // or AuthConfig::builder()
+        .build() // checks the `auth` schema, wires the crypto and Postgres adapters
+        .await?;
 
-async fn delete_widget(user: AuthUser) -> Result<StatusCode, AppError> {
-    user.require(Role::Manager)?; // 403 below manager, once AppError converts AuthError
+    let widgets = OpenApiRouter::<AppState>::new()
+        .route("/widgets/{id}", axum::routing::delete(delete_widget))
+        .layer(auth.guard()); // 401 unless a valid bearer token
+    let (router, _openapi) = OpenApiRouter::<AppState>::with_openapi(ApiDoc::openapi())
+        .nest("/api", auth.router().merge(widgets)) // auth routes join your OpenAPI document
+        .split_for_parts();
+    let app = router.with_state(AppState);
+
+    // Serve with the peer address, so per-IP limits and AUTH_TRUSTED_PROXIES work.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await?;
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
+    Ok(())
+}
+
+async fn delete_widget(user: AuthUser) -> Result<StatusCode, HttpError> {
+    user.require(Role::Manager)?; // 403 below manager
     // user.user_id, user.username, user.role, user.session_id ...
+    Ok(StatusCode::NO_CONTENT)
 }
 ```
 

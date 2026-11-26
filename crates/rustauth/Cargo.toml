@@ -49,6 +49,8 @@ sqlx = { workspace = true, features = ["macros", "migrate", "postgres", "runtime
 tokio = { workspace = true, features = ["macros", "rt"] }
 tower = { workspace = true, features = ["util"] }
 tracing-subscriber = { workspace = true, features = ["fmt"] }
+# `#[derive(OpenApi)]` in the README example, which runs as a doctest.
+utoipa = { workspace = true }
 
 [lints]
 workspace = true
