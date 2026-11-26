@@ -1,0 +1,28 @@
+[package]
+name = "rustauth-axum"
+description = "RustAuth HTTP adapter for axum: router, guard layer, extractors, and error mapping."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+axum = { workspace = true }
+rustauth-contracts = { workspace = true }
+rustauth-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+utoipa = { workspace = true }
+utoipa-axum = { workspace = true }
+
+[dev-dependencies]
+http-body-util = { workspace = true }
+rustauth-core = { workspace = true, features = ["testing"] }
+tokio = { workspace = true, features = ["macros", "rt"] }
+tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

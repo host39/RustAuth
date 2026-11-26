@@ -1,0 +1,28 @@
+[package]
+name = "rustauth"
+description = "Reusable authentication and authorization for axum + sqlx + Postgres applications."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["axum", "postgres"]
+# HTTP routes, guard layer, and extractors for axum.
+axum = ["dep:rustauth-axum"]
+# Postgres storage (sqlx) and the embedded `auth` schema migrations.
+postgres = ["dep:rustauth-postgres"]
+# `ts_rs::TS` derives on the contracts, for applications that export TypeScript bindings.
+ts = ["rustauth-contracts/ts"]
+
+[dependencies]
+rustauth-axum = { workspace = true, optional = true }
+rustauth-contracts = { workspace = true }
+rustauth-core = { workspace = true }
+rustauth-crypto = { workspace = true }
+rustauth-postgres = { workspace = true, optional = true }
+
+[lints]
+workspace = true

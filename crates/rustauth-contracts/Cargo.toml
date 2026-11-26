@@ -1,0 +1,23 @@
+[package]
+name = "rustauth-contracts"
+description = "RustAuth HTTP contracts: request and response DTOs with OpenAPI schemas and optional TypeScript bindings."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# Derives `ts_rs::TS` so applications can export the DTOs into their own TypeScript bindings.
+# `make contracts` uses it to regenerate `packages/contracts/ts/generated/`.
+ts = ["dep:ts-rs"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+ts-rs = { workspace = true, optional = true, features = ["serde-json-impl"] }
+utoipa = { workspace = true }
+
+[lints]
+workspace = true
