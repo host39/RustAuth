@@ -11,3 +11,4 @@ To add a new ADR:
 ## Index
 
 - [001 - Layered Crates and Storage in the `auth` Schema](./001-architecture.md)
+- [002 - Brute-Force Protection and Upgrade Policy](./002-lockout-and-upgrades.md)

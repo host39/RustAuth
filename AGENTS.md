@@ -65,6 +65,8 @@ Run `make check` before considering work done. If a check needs infrastructure t
 - Design spec: [docs/design/rustauth.md](./docs/design/rustauth.md)
 - Integration guide for applications (keep it in step with the facade and the package): [docs/integration.md](./docs/integration.md)
 - Architecture and storage decisions: [docs/adr/001-architecture.md](./docs/adr/001-architecture.md)
+- Brute-force protection and upgrade policy: [docs/adr/002-lockout-and-upgrades.md](./docs/adr/002-lockout-and-upgrades.md)
+- Release contents and upgrade notes: [CHANGELOG.md](./CHANGELOG.md)
 - Dependency boundaries: [boundaries.config.mjs](./boundaries.config.mjs)
 
 ## AI Assistants
