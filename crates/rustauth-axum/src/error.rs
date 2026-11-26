@@ -35,9 +35,13 @@ const INTERNAL_MESSAGE: &str = "An unexpected error occurred.";
 /// The error type of every auth route, extractor, and the guard: an [`AuthError`] (or a
 /// transport rejection such as an oversized body) that answers with the shared error body.
 ///
-/// Handlers return `Result<_, HttpError>` and `?` converts an `AuthError`.
+/// Handlers return `Result<_, HttpError>` and `?` converts an `AuthError`. The contents are
+/// boxed, so the `Result` stays small on the success path.
 #[derive(Debug)]
-pub struct HttpError {
+pub struct HttpError(Box<Inner>);
+
+#[derive(Debug)]
+struct Inner {
     kind: Kind,
     request_id: Option<String>,
 }
@@ -55,25 +59,25 @@ enum Kind {
 impl HttpError {
     /// A rejection that is not an `AuthError`, for example `413` for an oversized body.
     pub fn transport(status: StatusCode, message: &str, code: &str) -> Self {
-        Self {
+        Self(Box::new(Inner {
             kind: Kind::Transport {
                 status,
                 body: ErrorResponse::new(message, code),
             },
             request_id: None,
-        }
+        }))
     }
 
     /// Sets the request id the body echoes. Inside the auth router it defaults to the
     /// `X-Request-Id` header of the request being handled.
     #[must_use]
     pub fn with_request_id(mut self, request_id: Option<String>) -> Self {
-        self.request_id = request_id;
+        self.0.request_id = request_id;
         self
     }
 
     pub fn status(&self) -> StatusCode {
-        match &self.kind {
+        match &self.0.kind {
             Kind::Auth(error) => status(error),
             Kind::Transport { status, .. } => *status,
         }
@@ -81,7 +85,7 @@ impl HttpError {
 
     /// The service error, unless this is a transport rejection.
     pub fn error(&self) -> Option<&AuthError> {
-        match &self.kind {
+        match &self.0.kind {
             Kind::Auth(error) => Some(error),
             Kind::Transport { .. } => None,
         }
@@ -89,7 +93,7 @@ impl HttpError {
 
     /// The service error, for applications that map it into their own error type.
     pub fn into_error(self) -> Option<AuthError> {
-        match self.kind {
+        match self.0.kind {
             Kind::Auth(error) => Some(error),
             Kind::Transport { .. } => None,
         }
@@ -97,21 +101,21 @@ impl HttpError {
 
     /// The response body, with `requestId` filled in.
     pub fn body(&self) -> ErrorResponse {
-        let mut body = match &self.kind {
+        let mut body = match &self.0.kind {
             Kind::Auth(error) => body(error),
             Kind::Transport { body, .. } => body.clone(),
         };
-        body.request_id = self.request_id.clone().or_else(current);
+        body.request_id = self.0.request_id.clone().or_else(current);
         body
     }
 }
 
 impl From<AuthError> for HttpError {
     fn from(error: AuthError) -> Self {
-        Self {
+        Self(Box::new(Inner {
             kind: Kind::Auth(error),
             request_id: None,
-        }
+        }))
     }
 }
 
@@ -182,7 +186,7 @@ fn log(error: &HttpError, status: StatusCode, body: &ErrorResponse) {
     let code = body.code.as_deref();
     let request_id = body.request_id.as_deref();
     if status.is_server_error() {
-        let (reason, source) = match &error.kind {
+        let (reason, source) = match &error.0.kind {
             Kind::Auth(error) => (error.to_string(), error.source().map(ToString::to_string)),
             Kind::Transport { body, .. } => (body.error.clone(), None),
         };
@@ -340,6 +344,11 @@ mod tests {
         let (status, _, body) = respond(error).await;
         assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
         assert_eq!(body["code"], "PAYLOAD_TOO_LARGE");
+    }
+
+    #[test]
+    fn stays_pointer_sized() {
+        assert_eq!(size_of::<HttpError>(), size_of::<usize>());
     }
 
     #[test]
