@@ -4,7 +4,7 @@ Reusable authentication and authorization for Rust applications built on axum, s
 
 ## Status
 
-**v0.1 in progress.** The domain, Postgres storage, crypto, HTTP routes, guard, the `rustauth` facade, the `@rustauth/contracts` TypeScript package, and the [integration guide](./docs/integration.md) are in place and tested (unit tests with in-memory fakes, route tests, end-to-end tests against Postgres, Zod tests on captured responses, and a scratch application that installs the package from git). Still to come before `v0.1.0`: the changelog, the upgrade test job, and the first release tag. Until then, pin a `rev`.
+**v0.1 in progress.** The domain, Postgres storage, crypto, HTTP routes, guard, the `rustauth` facade, the `@rustauth/contracts` TypeScript package, and the [integration guide](./docs/integration.md) are in place and tested (unit tests with in-memory fakes, route tests, end-to-end tests against Postgres, Zod tests on captured responses, and a scratch application that installs the package from git). Still to come before `v0.1.0`: the upgrade test job and the first release tag. Until then, pin a `rev`. What each release adds and how to upgrade to it: [CHANGELOG.md](./CHANGELOG.md).
 
 ## What v0.1 Covers
 

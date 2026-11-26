@@ -442,7 +442,7 @@ The token is a bearer credential: whoever holds it acts as the user until it exp
 ## 10. Upgrade
 
 1. Bump the `rev` or `tag` of `rustauth` in `Cargo.toml` and of `@rustauth/contracts` in `package.json` together, in one commit.
-2. Read the upgrade notes in the changelog (from the first release on); before `1.0`, a minor release may break and lists the exact steps.
+2. Read the "Upgrade Notes" of every release in between in [CHANGELOG.md](../CHANGELOG.md), which also spells out deploy and rollback; before `1.0`, a minor release may break and lists the exact steps.
 3. Run the migrate step: new auth migrations apply automatically. Breaking schema changes ship as expand, then contract, across two releases, so a rolling deploy keeps working; the changelog says when a release must not be skipped.
 4. Run the full test suite, including the database tests.
 

@@ -377,7 +377,7 @@ The library is developed and released on its own schedule. New features (for exa
 
 ### Versions and Releases
 
-- Semantic version tags `vMAJOR.MINOR.PATCH`. Before 1.0, a minor bump may break; every break is listed in `CHANGELOG.md` under "Upgrade notes" with the exact steps.
+- Semantic version tags `vMAJOR.MINOR.PATCH`. Before 1.0, a minor bump may break; every break is listed in [`CHANGELOG.md`](../../CHANGELOG.md) under "Upgrade Notes" with the exact steps.
 - Applications pin a tag: `rustauth = { git = "https://github.com/host39/lib-rustauth", tag = "v0.1.0" }` (a `rev` is fine before the first tag). The npm package `@rustauth/contracts` carries the same version.
 - The facade crate `rustauth` is the only supported Rust surface. The inner crates may change in any release.
 
