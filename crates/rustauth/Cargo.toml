@@ -11,9 +11,11 @@ repository.workspace = true
 [features]
 default = ["axum", "postgres"]
 # HTTP routes, guard layer, and extractors for axum.
-axum = ["dep:rustauth-axum"]
-# Postgres storage (sqlx) and the embedded `auth` schema migrations.
-postgres = ["dep:rustauth-postgres"]
+axum = ["dep:rustauth-axum", "dep:utoipa-axum"]
+# Postgres storage (sqlx), the embedded `auth` schema migrations, and the startup schema check.
+postgres = ["dep:rustauth-postgres", "dep:sqlx"]
+# In-memory fakes of every port (`rustauth::testing`), for application tests without Postgres.
+testing = ["rustauth-core/testing"]
 # `ts_rs::TS` derives on the contracts, for applications that export TypeScript bindings.
 ts = ["rustauth-contracts/ts"]
 
@@ -23,6 +25,22 @@ rustauth-contracts = { workspace = true }
 rustauth-core = { workspace = true }
 rustauth-crypto = { workspace = true }
 rustauth-postgres = { workspace = true, optional = true }
+# Names `PgPool` in the builder; the application picks the TLS backend.
+sqlx = { workspace = true, optional = true, features = ["postgres"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+utoipa-axum = { workspace = true, optional = true }
+
+[dev-dependencies]
+axum = { workspace = true }
+http-body-util = { workspace = true }
+rustauth-core = { workspace = true, features = ["testing"] }
+serde_json = { workspace = true }
+# `#[sqlx::test]` databases for the end-to-end test (`make test-db`).
+sqlx = { workspace = true, features = ["macros", "migrate", "postgres", "runtime-tokio"] }
+tokio = { workspace = true, features = ["macros", "rt"] }
+tower = { workspace = true, features = ["util"] }
+tracing-subscriber = { workspace = true, features = ["fmt"] }
 
 [lints]
 workspace = true

@@ -1,7 +1,7 @@
 //! `migrate`: the `auth` schema, its own history table, idempotence, and coexistence with an
-//! application's migrations.
+//! application's migrations; `schema_status` before and after.
 
-use rustauth_postgres::{MIGRATOR, migrate};
+use rustauth_postgres::{MIGRATOR, SchemaStatus, migrate, schema_status};
 use sqlx::migrate::{Migration, MigrationType, Migrator};
 use sqlx::{PgPool, SqlSafeStr};
 
@@ -155,4 +155,47 @@ async fn constraints_reject_unknown_roles_and_assurance_levels(pool: PgPool) {
             .and_then(|error| error.constraint()),
         Some("sessions_assurance_check")
     );
+}
+
+#[sqlx::test(migrations = false)]
+#[ignore = "requires Postgres: run make test-db"]
+async fn schema_status_follows_the_history_table(pool: PgPool) {
+    let fresh = schema_status(&pool).await.expect("status before migrating");
+    assert_eq!(
+        fresh,
+        SchemaStatus {
+            pending: embedded(),
+            ..SchemaStatus::default()
+        }
+    );
+    migrate(&pool).await.expect("migrated");
+    assert!(schema_status(&pool).await.expect("status").is_current());
+
+    // A migration recorded by a newer version of the library.
+    sqlx::query(
+        "INSERT INTO auth._sqlx_migrations \
+         (version, description, success, checksum, execution_time) \
+         VALUES (99990101000000, 'from a newer release', true, '\\x00', 0)",
+    )
+    .execute(&pool)
+    .await
+    .expect("recorded a newer migration");
+    let newer = schema_status(&pool).await.expect("status");
+    assert_eq!(newer.unknown, [99_990_101_000_000]);
+    assert!(newer.pending.is_empty() && newer.changed.is_empty());
+
+    // An applied file that no longer matches, and one whose run failed.
+    let first = embedded()[0];
+    sqlx::query("UPDATE auth._sqlx_migrations SET checksum = '\\x01' WHERE version = $1")
+        .bind(first)
+        .execute(&pool)
+        .await
+        .expect("changed a checksum");
+    assert_eq!(schema_status(&pool).await.expect("status").changed, [first]);
+    sqlx::query("UPDATE auth._sqlx_migrations SET success = false WHERE version = $1")
+        .bind(first)
+        .execute(&pool)
+        .await
+        .expect("marked as failed");
+    assert_eq!(schema_status(&pool).await.expect("status").pending, [first]);
 }

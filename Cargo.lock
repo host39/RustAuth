@@ -1100,11 +1100,21 @@ dependencies = [
 name = "rustauth"
 version = "0.1.0"
 dependencies = [
+ "axum",
+ "http-body-util",
  "rustauth-axum",
  "rustauth-contracts",
  "rustauth-core",
  "rustauth-crypto",
  "rustauth-postgres",
+ "serde_json",
+ "sqlx",
+ "thiserror",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "utoipa-axum",
 ]
 
 [[package]]

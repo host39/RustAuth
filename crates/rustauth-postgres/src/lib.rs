@@ -7,12 +7,16 @@
 //!
 //! - [`migrate`]: creates the schema and applies pending migrations; [`MIGRATOR`] is the
 //!   underlying `sqlx` migrator.
+//! - [`schema_status`]: compares the applied migrations with the embedded ones (the facade's
+//!   startup check).
 //! - [`SqlxUserRepository`] and [`SqlxSessionRepository`]: the repository ports.
 //!
 //! This crate must not depend on HTTP, OpenAPI, or crypto crates (`make boundaries`).
 
 pub mod migrate;
 pub mod repositories;
+pub mod schema;
 
 pub use crate::migrate::{MIGRATIONS_TABLE, MIGRATOR, SCHEMA, migrate};
 pub use crate::repositories::{SqlxSessionRepository, SqlxUserRepository};
+pub use crate::schema::{SchemaStatus, schema_status};
