@@ -14,11 +14,17 @@ rustauth-contracts = { workspace = true }
 rustauth-core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# `task_local!` carries the request id from the router's layer to the error responses.
+tokio = { workspace = true, features = ["rt"] }
+# The `Layer` and `Service` traits for the guard.
+tower = { workspace = true }
 tracing = { workspace = true }
 utoipa = { workspace = true }
 utoipa-axum = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
+chrono = { workspace = true }
 http-body-util = { workspace = true }
 rustauth-core = { workspace = true, features = ["testing"] }
 tokio = { workspace = true, features = ["macros", "rt"] }

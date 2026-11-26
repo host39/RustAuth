@@ -1112,6 +1112,7 @@ name = "rustauth-axum"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "chrono",
  "http-body-util",
  "rustauth-contracts",
  "rustauth-core",
@@ -1122,6 +1123,7 @@ dependencies = [
  "tracing",
  "utoipa",
  "utoipa-axum",
+ "uuid",
 ]
 
 [[package]]
