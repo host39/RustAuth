@@ -81,7 +81,7 @@ Prerequisites: Rust stable (1.94 or newer), Node.js 22 with pnpm 10, and Docker 
 make install         # pnpm and Cargo dependencies
 make check           # format, lint, type-check, test, boundaries
 pnpm db:start        # local Postgres 18 on port 5433
-make test-db         # tests that need Postgres (DATABASE_URL overrides the default)
+make test-db         # tests that need Postgres, one throwaway database each (DATABASE_URL overrides)
 make contracts       # regenerate TypeScript bindings after changing a contract
 ```
 

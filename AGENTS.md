@@ -15,9 +15,9 @@ Run these yourself from the repo root to verify work:
 | `make contracts` | Regenerates `packages/contracts/ts/generated/` after contract changes |
 | `make check` | format + lint + type-check + test + boundaries |
 | `make ci` | lint + type-check + test + boundaries + contract drift, without writes |
-| `make test-db` | Tests marked `#[ignore]` that need Postgres (`DATABASE_URL`, default `localhost:5433/rustauth`) |
+| `make test-db` | Tests marked `#[ignore]` that need Postgres (`DATABASE_URL`, default the maintenance database `localhost:5433/postgres`; each test gets a throwaway database) |
 
-Run `make check` before considering work done. If a check needs infrastructure that is not running (Postgres for `test-db`), say so instead of skipping it silently. Point `make test-db` at another server with `make test-db DATABASE_URL=postgres://...`.
+Run `make check` before considering work done. If a check needs infrastructure that is not running (Postgres for `test-db`), say so instead of skipping it silently. Point `make test-db` at another server with `make test-db DATABASE_URL=postgres://.../postgres`.
 
 **User-only** (these start Docker or delete data): give the user the command instead of running it.
 

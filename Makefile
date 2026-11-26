@@ -3,9 +3,12 @@
 .DEFAULT_GOAL := help
 
 CONTRACTS_TS := packages/contracts/ts/generated
-# `make test-db` and `make example` use this database; override it on the command line or in the
-# environment. The default matches docker-compose.yml (`pnpm db:start`).
-DATABASE_URL ?= postgres://postgres:postgres@localhost:5433/rustauth
+# `make test-db` connects to the server's `postgres` maintenance database, where `#[sqlx::test]`
+# keeps its bookkeeping and from which it creates a throwaway database per test. `make example`
+# runs the example server against its own database. Override either on the command line or in the
+# environment; the defaults match docker-compose.yml (`pnpm db:start`).
+DATABASE_URL ?= postgres://postgres:postgres@localhost:5433/postgres
+EXAMPLE_DATABASE_URL ?= postgres://postgres:postgres@localhost:5433/rustauth
 
 help:
 	@echo "Targets:"
@@ -20,7 +23,7 @@ help:
 	@echo "  contracts   Regenerate TypeScript bindings from the Rust contracts"
 	@echo "  check       format + lint + type-check + test + boundaries"
 	@echo "  ci          check without writes, plus contract drift"
-	@echo "  example     Run the example server (uses DATABASE_URL)"
+	@echo "  example     Run the example server (uses EXAMPLE_DATABASE_URL)"
 	@echo "  clean       Wipe build output, dependencies, and the database volume"
 
 install:
@@ -68,7 +71,7 @@ ci: lint type-check test boundaries contracts
 	@test -z "$$(git ls-files --others --exclude-standard -- $(CONTRACTS_TS))" || (echo "Untracked bindings: run 'make contracts' and commit." && false)
 
 example:
-	DATABASE_URL=$(DATABASE_URL) cargo run -p example-server
+	DATABASE_URL=$(EXAMPLE_DATABASE_URL) cargo run -p example-server
 
 clean:
 	docker compose down -v
