@@ -134,10 +134,17 @@ trait UserRepository {
     async fn get(&self, id: UserId) -> Result<Option<User>>;
     async fn find(&self, username: &Username) -> Result<Option<(User, Option<PasswordCredential>)>>;
     async fn list(&self, page: Page) -> Result<(Vec<User>, u64)>;
-    async fn update(&self, user: &User) -> Result<()>;   // fails LastAdministrator in the same tx when no enabled admin would remain
+    /// Applies only the fields set in `patch` (display name, role, disabled), so concurrent changes to
+    /// different fields cannot overwrite each other; fails LastAdministrator in the same tx when no
+    /// enabled admin would remain.
+    async fn update(&self, id: UserId, patch: &UserPatch, at: DateTime<Utc>) -> Result<User>;
     async fn delete(&self, id: UserId) -> Result<bool>;  // same guard
     async fn count(&self) -> Result<u64>;
     async fn set_password(&self, user: UserId, hash: String, at: DateTime<Utc>) -> Result<()>;
+    // Lockout state (see Brute-Force Protection):
+    async fn record_failure(&self, user: UserId, at: DateTime<Utc>, since: DateTime<Utc>) -> Result<Lockout>; // one UPDATE ... RETURNING
+    async fn lock(&self, user: UserId, until: DateTime<Utc>, lockouts: u32) -> Result<bool>; // only if `lockouts` is unchanged
+    async fn unlock(&self, user: UserId) -> Result<()>;
 }
 trait SessionRepository {
     async fn insert(&self, session: &Session) -> Result<()>;
@@ -152,12 +159,14 @@ trait SessionRepository {
 
 `RegisterPolicy` holds what the service decided before the lock (`registration_open`, the setup token check result); the repository repeats the count check inside the lock and returns `SetupRequired` or `RegistrationClosed` when the state changed.
 
+The rules the repositories apply inside their transactions are defined in core so every implementation shares them: `RegisterPolicy::decide(count)` (first administrator), `User::ensure_admin_remains(next, others)` (last-administrator guard), and `Lockout::fail` / `Lockout::lock` (the lockout transitions). The services receive their adapters bundled as `Ports`.
+
 ### Services
 
 | Service | Operations |
 | --- | --- |
-| `AuthService` | `setup_status()` (needs setup, registration open), `register(input, setup_token, client)`, `login(username, password, client)`, `logout(principal)`, `verify(bearer)` (hash, load session plus user, reject expired, disabled, or deleted; slide `last_used_at` at most hourly), `me`, `update_profile(display_name)`, `change_password(current, new)` (revokes other sessions), `sessions`, `revoke(session_id)`, `revoke_others` |
-| `AdminService` | `list`, `get`, `create` (temporary password, role), `update` (role, disabled, display name, password reset; every change revokes that user's sessions), `delete`; refuses to remove, disable, or demote the last enabled administrator; caller must be `administrator` |
+| `AuthService` | `setup_status()` (needs setup, registration open), `register(input, setup_token, client)`, `login(username, password, client)`, `logout(principal)`, `verify(bearer)` (hash, load session plus user, reject expired, disabled, or deleted; slide `last_used_at` at most hourly), `me`, `update_profile(display_name)`, `change_password(current, new, client)` (revokes other sessions; a wrong current password counts toward the lockout and fails as a validation error on `current`), `sessions`, `revoke(session_id)`, `revoke_others`, `purge` (deletes expired sessions) |
+| `AdminService` | `list`, `get`, `create` (temporary password, role), `update` (role, disabled, display name, password reset; every change revokes that user's sessions), `unlock`, `delete`; refuses to remove, disable, or demote the last enabled administrator; caller must be `administrator` |
 | `LoginGuard` | Brute-force protection; see [Brute-Force Protection](#brute-force-protection) |
 | `RateLimiter` | In-memory token buckets per client IP for the public routes |
 
@@ -312,6 +321,8 @@ Error bodies use the same envelope as the RustInit template so applications can 
 | `AUTH_LOCKOUT_MAX_MINUTES` | `1440` | Longest lockout |
 | `AUTH_IP_FAILURE_LIMIT` | `30` | Failed logins per client IP per 15 minutes |
 | `AUTH_RATE_LIMIT_PER_MINUTE` | `60` | Requests per client IP per minute to the public auth routes |
+
+Validation: numbers are whole and at least 1; session lifetimes are at most 3650 days and lockout lengths at most one year; `AUTH_SESSION_MAX_DAYS` must be at least `AUTH_SESSION_TTL_DAYS` and `AUTH_LOCKOUT_MAX_MINUTES` at least `AUTH_LOCKOUT_MINUTES`; `AUTH_SETUP_TOKEN` needs 16 or more characters without whitespace; `AUTH_REGISTRATION_OPEN` is `true` or `false`; blank values count as unset. One `ConfigError` (`rustauth.config.invalid AUTH_...`) names every invalid variable. Two settings exist only on the builder: `failure_window` (15 minutes, the account and per-IP failure window) and `touch_interval` (1 hour). Per-IP limits group IPv6 clients by /64 prefix.
 
 ## Contracts
 
