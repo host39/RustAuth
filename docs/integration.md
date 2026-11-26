@@ -28,10 +28,13 @@ Each member enables only the features it needs:
 
 | Feature | Gives | Typical member |
 | --- | --- | --- |
-| `axum` | `RustAuth::router`, `guard`, `AuthUser`, `OptionalAuthUser`, `HttpError` | HTTP crate |
-| `postgres` | `RustAuth::builder().pool`, `migrate`, `schema_status`, the startup schema check | HTTP crate and the crate that runs migrations |
+| `axum` | `RustAuth::router`, `guard`, `AuthUser`, `OptionalAuthUser`, `HttpError`, `request_scope` (turns on `contracts`) | HTTP crate |
+| `postgres` | `RustAuth::builder().pool`, the startup schema check (turns on `migrate` and `crypto`) | HTTP crate |
+| `migrate` | `migrate`, `schema_status`; Postgres and sqlx only, no HTTP, OpenAPI, or hashing crates | the crate that runs migrations |
+| `contracts` | `rustauth::contracts::*`, the request and response DTOs | contracts crate |
+| `crypto` | `rustauth::ports::{Argon2Hasher, RandomTokens}`, to combine with custom storage | crate with custom storage |
 | `testing` | `rustauth::testing::Fakes`, in-memory ports for tests without Postgres | `[dev-dependencies]` |
-| `ts` | `ts_rs::TS` on `rustauth::contracts::*`, for applications whose own ts-rs types embed them | contracts crate |
+| `ts` | `ts_rs::TS` on `rustauth::contracts::*`, for applications whose own ts-rs types embed them (turns on `contracts`) | contracts crate |
 
 ```toml
 # apps/api/Cargo.toml
@@ -39,7 +42,12 @@ rustauth = { workspace = true, features = ["axum", "postgres"] }
 
 [dev-dependencies]
 rustauth = { workspace = true, features = ["axum", "postgres", "testing"] }
+
+# packages/database/Cargo.toml: the crate with the migrate step stays free of HTTP crates.
+rustauth = { workspace = true, features = ["migrate"] }
 ```
+
+Depend on the facade with the `migrate` feature there, not on `rustauth-postgres`: the inner crates may change in any release. Dependency rules of the application (for example a boundaries check that keeps the database crate free of HTTP crates) should allow `rustauth` in that crate.
 
 The library turns on no sqlx TLS backend: the application builds the `PgPool` and picks one, for example `features = ["postgres", "runtime-tokio", "tls-rustls-ring-webpki"]` on its own `sqlx` line. `cargo tree -d` should list no second copy of `axum`, `sqlx`, or `utoipa`; if it does, align the application's versions with the library's `Cargo.toml`.
 
@@ -273,6 +281,8 @@ let auth = RustAuth::builder().ports(Fakes::new().ports()).config(config).build(
 // Register the first account through POST /api/auth/register with that setup token, then send
 // its token as `Authorization: Bearer <token>` to the guarded routes.
 ```
+
+Handler tests that skip the guard insert a caller directly: `request.extensions_mut().insert(AuthUser::new(Principal::new(user_id, username, Role::Manager, session_id)))`. `Principal` and `Ports` are built with their constructors (`Principal::new`, `Ports::new`), never struct literals, so fields added later do not break the application.
 
 The fakes hash and issue tokens insecurely on purpose: never use them outside tests. Tests that touch the application's tables use `#[sqlx::test(migrations = false)]` and the migrate function from step 2, then build `RustAuth` on the test pool.
 

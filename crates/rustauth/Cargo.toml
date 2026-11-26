@@ -11,19 +11,27 @@ repository.workspace = true
 [features]
 default = ["axum", "postgres"]
 # HTTP routes, guard layer, and extractors for axum.
-axum = ["dep:rustauth-axum", "dep:utoipa-axum"]
-# Postgres storage (sqlx), the embedded `auth` schema migrations, and the startup schema check.
-postgres = ["dep:rustauth-postgres", "dep:sqlx"]
+axum = ["contracts", "dep:rustauth-axum", "dep:utoipa-axum"]
+# The request and response DTOs (`rustauth::contracts`), with utoipa schemas.
+contracts = ["dep:rustauth-contracts"]
+# The Argon2id hasher and random session tokens (`rustauth::ports`), to combine with custom
+# storage.
+crypto = ["dep:rustauth-crypto"]
+# The embedded `auth` schema migrations and `schema_status` only, for a crate that runs the
+# migrate step: Postgres and sqlx, without HTTP, OpenAPI, or hashing crates.
+migrate = ["dep:rustauth-postgres", "dep:sqlx"]
+# Postgres storage for `RustAuth::builder().pool(...)`, with the startup schema check.
+postgres = ["crypto", "migrate"]
 # In-memory fakes of every port (`rustauth::testing`), for application tests without Postgres.
 testing = ["rustauth-core/testing"]
 # `ts_rs::TS` derives on the contracts, for applications that export TypeScript bindings.
-ts = ["rustauth-contracts/ts"]
+ts = ["contracts", "rustauth-contracts/ts"]
 
 [dependencies]
 rustauth-axum = { workspace = true, optional = true }
-rustauth-contracts = { workspace = true }
+rustauth-contracts = { workspace = true, optional = true }
 rustauth-core = { workspace = true }
-rustauth-crypto = { workspace = true }
+rustauth-crypto = { workspace = true, optional = true }
 rustauth-postgres = { workspace = true, optional = true }
 # Names `PgPool` in the builder; the application picks the TLS backend.
 sqlx = { workspace = true, optional = true, features = ["postgres"] }

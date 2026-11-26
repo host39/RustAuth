@@ -48,7 +48,7 @@ lib-rustauth/
     rustauth-postgres/        sqlx repositories + migrations in schema `auth`
     rustauth-contracts/       DTOs (serde + utoipa; optional ts-rs under the `ts` feature)
     rustauth-axum/            router, guard layer, extractors, HTTP error mapping
-    rustauth/                 facade: re-exports + `RustAuth::builder()`; features `postgres`, `axum`, `testing`, `ts`
+    rustauth/                 facade: re-exports + `RustAuth::builder()`; features `axum`, `postgres`, `migrate`, `contracts`, `crypto`, `testing`, `ts`
   packages/contracts/         npm package `@rustauth/contracts`: generated TS types + Zod schemas
   examples/server/            minimal axum app using the facade (docs and smoke tests)
   docs/                       design, ADRs, integration guide

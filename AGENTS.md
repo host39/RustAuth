@@ -38,7 +38,7 @@ Run `make check` before considering work done. If a check needs infrastructure t
 | `crates/rustauth-postgres` | sqlx repositories and embedded migrations in the `auth` schema, tracked in `auth._sqlx_migrations` |
 | `crates/rustauth-contracts` | Request and response DTOs (serde + utoipa; `ts-rs` under the `ts` feature) |
 | `crates/rustauth-axum` | Router (`OpenApiRouter<S>` with its own state), guard layer, `AuthUser` extractors, client IP, `AuthError` to HTTP mapping; route tests in `tests/routes` |
-| `crates/rustauth` | Facade: `RustAuth::builder()` (the composition root, with the startup schema check), `migrate`, curated re-exports; features `axum`, `postgres`, `testing`, `ts` |
+| `crates/rustauth` | Facade: `RustAuth::builder()` (the composition root, with the startup schema check), `migrate`, curated re-exports; features `axum`, `postgres`, `migrate`, `contracts`, `crypto`, `testing`, `ts` |
 | `packages/contracts` | npm package `@rustauth/contracts`: generated TS types + Zod schemas |
 | `examples/server` | Minimal axum application that uses the facade (docs and smoke tests) |
 | `docs` | Design spec, integration guide, ADRs |

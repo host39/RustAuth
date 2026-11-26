@@ -48,11 +48,16 @@
 //!
 //! Features:
 //!
-//! - `axum` (default): HTTP routes, guard layer, and extractors.
-//! - `postgres` (default): Postgres storage, the embedded `auth` schema migrations, and the
-//!   schema check at startup.
-//! - `testing`: in-memory fakes of every port ([`testing`]), for application tests.
-//! - `ts`: `ts_rs::TS` derives on the [`contracts`].
+//! - `axum` (default): HTTP routes, guard layer, and extractors; turns on `contracts`.
+//! - `postgres` (default): Postgres storage and the schema check at startup; turns on `migrate`
+//!   and `crypto`.
+//! - `migrate`: only `migrate` and `schema_status`, for a crate that runs the migrate step
+//!   (`default-features = false, features = ["migrate"]` pulls in no HTTP, OpenAPI, or hashing
+//!   crates).
+//! - `contracts`: the request and response DTOs (`contracts`).
+//! - `crypto`: the Argon2id hasher and random tokens in `ports`, for custom storage.
+//! - `testing`: in-memory fakes of every port (`testing`), for application tests.
+//! - `ts`: `ts_rs::TS` derives on the contracts; turns on `contracts`.
 //!
 //! See `docs/integration.md` for the integration guide and `docs/design/rustauth.md` for the design.
 
@@ -72,7 +77,7 @@ pub use rustauth_axum::{
     QueryParams, REQUEST_ID_HEADER, SECURITY_SCHEME, client_ip, request_scope,
 };
 
-#[cfg(feature = "postgres")]
+#[cfg(feature = "migrate")]
 pub use rustauth_postgres::{SchemaStatus, migrate, schema_status};
 
 /// The version of this library, from `Cargo.toml`.
@@ -80,6 +85,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Request and response DTOs of the auth routes (camelCase JSON, `utoipa::ToSchema`, and
 /// `ts_rs::TS` under the `ts` feature), for clients and for applications that export them.
+#[cfg(feature = "contracts")]
 pub mod contracts {
     pub use rustauth_contracts::{
         ChangePasswordRequest, CreateUserRequest, DetailsResponse, ErrorResponse, ListResponse,
@@ -96,6 +102,7 @@ pub mod ports {
         Reservation, SessionRepository, Subject, SystemClock, TokenHash, TokenIssuer, UserPatch,
         UserRepository,
     };
+    #[cfg(feature = "crypto")]
     pub use rustauth_crypto::{Argon2Hasher, RandomTokens};
 }
 
