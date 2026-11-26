@@ -217,6 +217,8 @@ The library takes a `PgPool`. It can be the application's pool (same database, s
 
 Column order follows the template's `postgres-column-alignment` rule. Constraints use `text` plus `CHECK` rather than enum types, so adding values later is a plain migration.
 
+The repositories (`SqlxUserRepository`, `SqlxSessionRepository`) use runtime-checked queries, never the `query!` macros, so building needs no database. `register`, `update`, and `delete` run in one transaction that first takes `pg_advisory_xact_lock` on a fixed key (the ASCII bytes of `rustauth`) and then locks the row, so the first-administrator decision and the last-administrator guard are serialized across connections and processes. `record_failure`, `lock`, and `unlock` are single statements. Driver errors become `AuthError::Internal` with `rustauth.<table>.<operation>.failed` keys; a violation of the `lower(username)` unique index becomes `UsernameTaken`. Client IPs are bound as text and cast to `inet` (read back with `host(ip)`), so the crate needs no sqlx `ipnet` feature.
+
 ### `auth.users`
 
 | Column | Type | Notes |

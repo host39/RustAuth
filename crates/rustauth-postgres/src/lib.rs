@@ -5,9 +5,14 @@
 //! `auth._sqlx_migrations`, so they never collide with an application's own migration history.
 //! The library takes the application's `PgPool` (or a pool to a separate database).
 //!
+//! - [`migrate`]: creates the schema and applies pending migrations; [`MIGRATOR`] is the
+//!   underlying `sqlx` migrator.
+//! - [`SqlxUserRepository`] and [`SqlxSessionRepository`]: the repository ports.
+//!
 //! This crate must not depend on HTTP, OpenAPI, or crypto crates (`make boundaries`).
 
 pub mod migrate;
 pub mod repositories;
 
-// Re-export the public API of each module here as it lands, so callers import from the crate root.
+pub use crate::migrate::{MIGRATIONS_TABLE, MIGRATOR, SCHEMA, migrate};
+pub use crate::repositories::{SqlxSessionRepository, SqlxUserRepository};

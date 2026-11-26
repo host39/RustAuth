@@ -21,11 +21,15 @@ sqlx = { workspace = true, features = [
   "runtime-tokio",
   "uuid",
 ] }
+# `try_join!` for independent reads on the pool (see the `parallel-db-reads` rule).
+tokio = { workspace = true, features = ["macros"] }
 tracing = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt"] }
+# The services and in-memory fakes, to run core's rules against these repositories.
+rustauth-core = { workspace = true, features = ["testing"] }
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
 
 [lints]
 workspace = true
