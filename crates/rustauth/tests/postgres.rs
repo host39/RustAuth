@@ -260,6 +260,11 @@ async fn refuses_a_newer_schema_unless_allowed(pool: PgPool) {
     .execute(&pool)
     .await
     .expect("recorded a newer migration");
+    // The documented startup order of an older version: its migrate step runs first and must
+    // not fail, so that `build()` gets to decide.
+    rustauth::migrate(&pool)
+        .await
+        .expect("an older version migrates a newer schema");
 
     let error = RustAuth::builder()
         .pool(pool.clone())

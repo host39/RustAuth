@@ -184,6 +184,11 @@ async fn schema_status_follows_the_history_table(pool: PgPool) {
     let newer = schema_status(&pool).await.expect("status");
     assert_eq!(newer.unknown, [99_990_101_000_000]);
     assert!(newer.pending.is_empty() && newer.changed.is_empty());
+    // This (older) version's migrate step still runs against it and leaves it alone.
+    migrate(&pool)
+        .await
+        .expect("an older version migrates a newer schema");
+    assert_eq!(schema_status(&pool).await.expect("status"), newer);
 
     // An applied file that no longer matches, and one whose run failed.
     let first = embedded()[0];

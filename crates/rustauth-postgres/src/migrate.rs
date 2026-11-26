@@ -19,19 +19,26 @@ static EMBEDDED: Migrator = sqlx::migrate!("./migrations");
 /// The embedded migrations, set up to create the `auth` schema and to track their history in
 /// [`MIGRATIONS_TABLE`]. [`migrate`] runs it; tests pass it to `#[sqlx::test(migrator = ...)]`.
 ///
+/// Applied migrations that this version does not embed (a newer release migrated the database,
+/// and the application was rolled back or an older instance restarts during a rolling deploy)
+/// are left alone instead of failing the run: the startup schema check reports them
+/// ([`crate::schema_status`]) and the application decides whether to start against them.
+///
 /// Never run these migrations with a migrator that uses the default table: it would record them
 /// in the application's `_sqlx_migrations`, where versions can collide.
 pub static MIGRATOR: LazyLock<Migrator> = LazyLock::new(|| {
     let mut migrator = Migrator::with_migrations(EMBEDDED.iter().cloned().collect());
     migrator.dangerous_set_table_name(MIGRATIONS_TABLE);
     migrator.create_schema(SCHEMA);
+    migrator.set_ignore_missing(true);
     migrator
 });
 
 /// Applies pending RustAuth migrations. Applications call it in their migrate step before their
 /// own migrations (which may then reference `auth.users (id)`). Safe to run on every start and
 /// from several processes at once: applied migrations are skipped, and the migrator holds a
-/// Postgres advisory lock while it runs.
+/// Postgres advisory lock while it runs. Migrations a newer release applied are left alone (see
+/// [`MIGRATOR`]).
 ///
 /// Fails with `rustauth.migrate.failed` when a migration fails or an applied migration no longer
 /// matches the embedded file (the error's source says which).
@@ -59,5 +66,9 @@ mod tests {
         assert_eq!(MIGRATOR.table_name, MIGRATIONS_TABLE);
         assert_eq!(MIGRATOR.create_schemas.as_ref(), [SCHEMA]);
         assert!(MIGRATOR.locking);
+        assert!(
+            MIGRATOR.ignore_missing,
+            "newer releases' migrations must not fail the run"
+        );
     }
 }

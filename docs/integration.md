@@ -56,7 +56,7 @@ async fn migrate(pool: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-- `rustauth::migrate` is safe on every start and from several processes at once: applied migrations are skipped, and a Postgres advisory lock serializes the runs.
+- `rustauth::migrate` is safe on every start and from several processes at once: applied migrations are skipped, and a Postgres advisory lock serializes the runs. Auth migrations from a newer release (after a rollback, or while an older instance restarts during a rolling deploy) are left alone; `build()` decides whether to start against them (below).
 - `sqlx migrate run` (sqlx-cli) only knows the application's migrations. Use a migrate binary or startup code like the function above, also in deploy scripts and containers.
 - Database tests use the same order. With `#[sqlx::test]`, turn off the automatic migrations and call the function:
 
