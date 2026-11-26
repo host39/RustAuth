@@ -50,7 +50,7 @@ pub trait UserRepository: Send + Sync {
     async fn update(&self, id: UserId, patch: &UserPatch, at: DateTime<Utc>) -> AuthResult<User>;
 
     /// Deletes the user with its credential and sessions; `false` when missing. Same guard and
-    /// serialization as `update`.
+    /// serialization as `update`. `UserInUse` when other records still reference the account.
     async fn delete(&self, id: UserId) -> AuthResult<bool>;
 
     async fn count(&self) -> AuthResult<u64>;

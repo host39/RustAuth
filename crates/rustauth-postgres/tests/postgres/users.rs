@@ -667,3 +667,36 @@ async fn gets_many_accounts_at_once(pool: PgPool) {
     assert_eq!(found, [alice, bob]);
     assert!(users.get_many(&[]).await.expect("read").is_empty());
 }
+
+#[sqlx::test(migrator = "rustauth_postgres::MIGRATOR")]
+#[ignore = "requires Postgres: run make test-db"]
+async fn refuses_to_delete_an_account_other_rows_still_reference(pool: PgPool) {
+    let users = SqlxUserRepository::new(pool.clone());
+    create(&users, "admin", Role::Administrator).await;
+    let author = create(&users, "author", Role::User).await;
+    let owner = create(&users, "owner", Role::User).await;
+    // Application tables: one with the default NO ACTION, one checked at commit.
+    sqlx::raw_sql(
+        "CREATE TABLE notes (author_id uuid NOT NULL REFERENCES auth.users (id)); \
+         CREATE TABLE drafts (owner_id uuid NOT NULL REFERENCES auth.users (id) \
+         DEFERRABLE INITIALLY DEFERRED)",
+    )
+    .execute(&pool)
+    .await
+    .expect("created the application tables");
+    sqlx::query("INSERT INTO notes (author_id) VALUES ($1)")
+        .bind(author.id.as_uuid())
+        .execute(&pool)
+        .await
+        .expect("inserted");
+    sqlx::query("INSERT INTO drafts (owner_id) VALUES ($1)")
+        .bind(owner.id.as_uuid())
+        .execute(&pool)
+        .await
+        .expect("inserted");
+    for user in [&author, &owner] {
+        let error = users.delete(user.id).await.expect_err("referenced");
+        assert!(matches!(error, AuthError::UserInUse), "{error:?}");
+        assert_eq!(&stored(&users, user.id).await, user, "nothing was deleted");
+    }
+}

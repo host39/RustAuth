@@ -95,7 +95,7 @@ CREATE TABLE widgets (
 CREATE INDEX widgets_owner_id_idx ON widgets (owner_id);
 ```
 
-- `ON DELETE CASCADE` removes the application's rows when an administrator deletes the account; use `ON DELETE SET NULL` on a nullable column for rows that outlive their author.
+- `ON DELETE CASCADE` removes the application's rows when an administrator deletes the account; use `ON DELETE SET NULL` on a nullable column for rows that outlive their author. A reference without either (Postgres' default `NO ACTION`, or `RESTRICT`) blocks deleting the account: `DELETE /admin/users/{id}` then answers `409 USER_IN_USE`, and the administrator can disable the account instead.
 - Application data about a person (profile fields, settings, per-application permissions) lives in the application's tables keyed by the user id, for example `user_settings (user_id uuid PRIMARY KEY REFERENCES auth.users (id) ON DELETE CASCADE, ...)`.
 - Never write to `auth` tables and never read them directly: they can change in any release, and they hold password and token hashes. Use the services (`auth.service()`, `auth.admin()`) and the HTTP routes. If the application needs account data that the library does not offer, add it to the library as a general capability.
 - Work outside a signed-in request (background jobs, schedulers) reads accounts with `auth.service().user(id)` or, for many at once, `auth.service().users(&ids)`: role, disabled state, username, and display name, without an administrator caller. Select the application's own rows first, then resolve their user ids this way instead of joining `auth.users` for anything but `id`.

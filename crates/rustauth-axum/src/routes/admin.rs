@@ -179,7 +179,7 @@ pub(crate) async fn unlock(
 }
 
 /// Deletes the account with its sessions. Application rows that reference `auth.users (id)`
-/// with `ON DELETE CASCADE` go with it.
+/// with `ON DELETE CASCADE` go with it; any other reference refuses the deletion (`409`).
 #[utoipa::path(
     delete,
     path = "/admin/users/{id}",
@@ -193,6 +193,7 @@ pub(crate) async fn unlock(
         (status = 401, description = "Missing, expired, or revoked token (`UNAUTHORIZED`)", body = ErrorResponse),
         (status = 403, description = "Not an administrator (`FORBIDDEN`)", body = ErrorResponse),
         (status = 404, description = "No such account (`ENTITY_NOT_FOUND`)", body = ErrorResponse),
+        (status = 409, description = "Other records still refer to the account (`USER_IN_USE`)", body = ErrorResponse),
         (status = 422, description = "Would leave no enabled administrator (`LAST_ADMINISTRATOR`)", body = ErrorResponse),
     )
 )]

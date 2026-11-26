@@ -22,7 +22,8 @@ pub(crate) fn violates(error: &sqlx::Error, name: &str) -> bool {
         == Some(name)
 }
 
-/// Whether `error` is a foreign key violation (the referenced user no longer exists).
+/// Whether `error` is a foreign key violation: the referenced user no longer exists, or (on a
+/// delete) another row still references it.
 pub(crate) fn orphaned(error: &sqlx::Error) -> bool {
     error
         .as_database_error()

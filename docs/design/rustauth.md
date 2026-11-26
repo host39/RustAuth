@@ -139,7 +139,7 @@ trait UserRepository {
     /// different fields cannot overwrite each other; fails LastAdministrator in the same tx when no
     /// enabled admin would remain.
     async fn update(&self, id: UserId, patch: &UserPatch, at: DateTime<Utc>) -> Result<User>;
-    async fn delete(&self, id: UserId) -> Result<bool>;  // same guard
+    async fn delete(&self, id: UserId) -> Result<bool>;  // same guard; UserInUse while referenced
     async fn count(&self) -> Result<u64>;
     async fn set_password(&self, user: UserId, hash: String, at: DateTime<Utc>) -> Result<()>;
     // Lockout state (see Brute-Force Protection). `Subject` is an account (`User(UserId)`) or a
@@ -207,6 +207,7 @@ Tradeoff: lockout lets an attacker who knows a username lock that person out tem
 | `Validation { field, message }` | 400 | `VALIDATION_ERROR` |
 | `NotFound` | 404 | `ENTITY_NOT_FOUND` |
 | `UsernameTaken` | 409 | `USERNAME_TAKEN` |
+| `UserInUse` (an application row still references the account being deleted) | 409 | `USER_IN_USE` |
 | `SetupRequired`, `RegistrationClosed` | 403 | same names, upper snake case |
 | `LastAdministrator` | 422 | `LAST_ADMINISTRATOR` |
 | `RateLimited { retry_after_secs }` | 429 + `Retry-After` | `RATE_LIMITED` |

@@ -52,6 +52,13 @@ pub enum AuthError {
     #[error("At least one enabled administrator must remain.")]
     LastAdministrator,
 
+    /// The account cannot be deleted while other records refer to it (an application table that
+    /// references `auth.users (id)` without `ON DELETE CASCADE` or `SET NULL`). Maps to 409.
+    #[error(
+        "Other records still refer to this account, so it cannot be deleted. Disable it instead."
+    )]
+    UserInUse,
+
     /// The client sent too many requests or too many failed sign-ins. Maps to 429.
     #[error("Too many requests. Try again in {}.", seconds(.retry_after_secs))]
     RateLimited { retry_after_secs: u64 },
@@ -120,6 +127,7 @@ impl AuthError {
             Self::SetupRequired => "SETUP_REQUIRED",
             Self::RegistrationClosed => "REGISTRATION_CLOSED",
             Self::LastAdministrator => "LAST_ADMINISTRATOR",
+            Self::UserInUse => "USER_IN_USE",
             Self::RateLimited { .. } => "RATE_LIMITED",
             Self::AccountLocked { .. } => "ACCOUNT_LOCKED",
             Self::Internal { .. } => "INTERNAL_ERROR",
@@ -174,6 +182,7 @@ mod tests {
             (AuthError::SetupRequired, "SETUP_REQUIRED"),
             (AuthError::RegistrationClosed, "REGISTRATION_CLOSED"),
             (AuthError::LastAdministrator, "LAST_ADMINISTRATOR"),
+            (AuthError::UserInUse, "USER_IN_USE"),
             (
                 AuthError::RateLimited {
                     retry_after_secs: 1,

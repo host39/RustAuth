@@ -8,7 +8,7 @@
 //! | `Forbidden` | 403 | `FORBIDDEN` |
 //! | `Validation` | 400 | `VALIDATION_ERROR` (with `field`) |
 //! | `NotFound` | 404 | `ENTITY_NOT_FOUND` (with `details.entityName`) |
-//! | `UsernameTaken` | 409 | `USERNAME_TAKEN` |
+//! | `UsernameTaken`, `UserInUse` | 409 | `USERNAME_TAKEN`, `USER_IN_USE` |
 //! | `SetupRequired`, `RegistrationClosed` | 403 | `SETUP_REQUIRED`, `REGISTRATION_CLOSED` |
 //! | `LastAdministrator` | 422 | `LAST_ADMINISTRATOR` |
 //! | `RateLimited`, `AccountLocked` | 429 + `Retry-After` | `RATE_LIMITED`, `ACCOUNT_LOCKED` (with `details.retryAfterSecs`) |
@@ -146,7 +146,7 @@ pub fn status(error: &AuthError) -> StatusCode {
         }
         AuthError::Validation { .. } => StatusCode::BAD_REQUEST,
         AuthError::NotFound { .. } => StatusCode::NOT_FOUND,
-        AuthError::UsernameTaken => StatusCode::CONFLICT,
+        AuthError::UsernameTaken | AuthError::UserInUse => StatusCode::CONFLICT,
         AuthError::LastAdministrator => StatusCode::UNPROCESSABLE_ENTITY,
         AuthError::RateLimited { .. } | AuthError::AccountLocked { .. } => {
             StatusCode::TOO_MANY_REQUESTS
@@ -241,6 +241,7 @@ mod tests {
             (AuthError::validation("username", "Bad."), 400),
             (AuthError::not_found("User"), 404),
             (AuthError::UsernameTaken, 409),
+            (AuthError::UserInUse, 409),
             (AuthError::SetupRequired, 403),
             (AuthError::RegistrationClosed, 403),
             (AuthError::LastAdministrator, 422),

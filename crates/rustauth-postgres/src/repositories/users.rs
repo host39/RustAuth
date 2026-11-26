@@ -265,13 +265,21 @@ impl UserRepository for SqlxUserRepository {
         };
         let others = Self::other_admins(&mut tx, id, KEY).await?;
         user.ensure_admin_remains(None, others)?;
-        // The credential and sessions go with it (ON DELETE CASCADE).
+        // The credential and sessions go with it (ON DELETE CASCADE). An application reference
+        // without CASCADE or SET NULL refuses the delete, at once or (deferred) at commit.
+        let in_use = |error: sqlx::Error| {
+            if orphaned(&error) {
+                AuthError::UserInUse
+            } else {
+                AuthError::internal(KEY, error)
+            }
+        };
         sqlx::query("DELETE FROM auth.users WHERE id = $1")
             .bind(id.as_uuid())
             .execute(&mut *tx)
             .await
-            .map_err(internal(KEY))?;
-        tx.commit().await.map_err(internal(KEY))?;
+            .map_err(in_use)?;
+        tx.commit().await.map_err(in_use)?;
         Ok(true)
     }
 

@@ -309,3 +309,63 @@ async fn refuses_a_changed_migration(pool: PgPool) {
         "{error:?}"
     );
 }
+
+#[sqlx::test(migrations = false)]
+#[ignore = "requires Postgres: run make test-db"]
+async fn deleting_a_referenced_account_answers_409(pool: PgPool) {
+    rustauth::migrate(&pool).await.expect("migrated");
+    sqlx::raw_sql("CREATE TABLE notes (author_id uuid NOT NULL REFERENCES auth.users (id))")
+        .execute(&pool)
+        .await
+        .expect("created the application table");
+    let auth = RustAuth::builder()
+        .pool(pool.clone())
+        .config(config())
+        .build()
+        .await
+        .expect("built");
+    let router = app(&auth);
+    let registration = json!({
+        "username": "root",
+        "password": PASSWORD,
+        "displayName": "Root",
+        "setupToken": SETUP,
+    });
+    let (_, body) = send(
+        &router,
+        "POST",
+        "/api/auth/register",
+        None,
+        Some(registration),
+    )
+    .await;
+    let root = body["data"]["token"].as_str().expect("token").to_owned();
+    let account = json!({
+        "username": "author",
+        "displayName": "Author",
+        "temporaryPassword": PASSWORD,
+        "role": "user",
+    });
+    let (status, body) = send(
+        &router,
+        "POST",
+        "/api/admin/users",
+        Some(&root),
+        Some(account),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let id = body["data"]["id"].as_str().expect("id").to_owned();
+    sqlx::query("INSERT INTO notes (author_id) VALUES ($1::uuid)")
+        .bind(&id)
+        .execute(&pool)
+        .await
+        .expect("inserted");
+
+    let uri = format!("/api/admin/users/{id}");
+    let (status, body) = send(&router, "DELETE", &uri, Some(&root), None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], "USER_IN_USE");
+    let (status, _) = send(&router, "GET", &uri, Some(&root), None).await;
+    assert_eq!(status, StatusCode::OK, "the account is still there");
+}
