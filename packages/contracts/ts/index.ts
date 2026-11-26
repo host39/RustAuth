@@ -91,6 +91,14 @@ export const USER_ROLES = [
 ] as const satisfies readonly UserRole[];
 
 /**
+ * Whether `role` is `minimum` or higher (`administrator > manager > user`), like the server's
+ * `Principal::has_role`. For showing or hiding UI only: the server checks every request.
+ */
+export function hasRole(role: UserRole, minimum: UserRole): boolean {
+  return USER_ROLES.indexOf(role) <= USER_ROLES.indexOf(minimum);
+}
+
+/**
  * Seconds to wait before retrying, from `details.retryAfterSecs` of a `429` body
  * (`RATE_LIMITED` or `ACCOUNT_LOCKED`). Browsers cannot read `Retry-After` across origins unless
  * the server exposes it, so the body repeats it.

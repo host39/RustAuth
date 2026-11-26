@@ -9,6 +9,7 @@ import {
   authRoutes,
   createUserRequestSchema,
   errorResponseSchema,
+  hasRole,
   registerRequestSchema,
   retryAfterSecs,
   sessionListBodySchema,
@@ -201,6 +202,14 @@ describe("requests", () => {
     assert.equal(createUserRequestSchema.safeParse({ ...account, role: "auditor" }).success, false);
     assert.deepEqual(updateUserRequestSchema.parse({ disabled: true }), { disabled: true });
   });
+});
+
+test("roles are ordered from administrator down", () => {
+  assert.equal(hasRole("administrator", "manager"), true);
+  assert.equal(hasRole("manager", "manager"), true);
+  assert.equal(hasRole("user", "manager"), false);
+  assert.equal(hasRole("manager", "administrator"), false);
+  assert.equal(hasRole("user", "user"), true);
 });
 
 test("routes encode ids", () => {
