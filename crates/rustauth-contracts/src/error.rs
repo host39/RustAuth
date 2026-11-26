@@ -9,6 +9,7 @@ use utoipa::ToSchema;
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize, ToSchema)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, optional_fields))]
 #[serde(rename_all = "camelCase")]
+#[schema(as = rustauth::ErrorResponse)]
 pub struct ErrorResponse {
     /// Human-readable message.
     pub error: String,
@@ -18,6 +19,7 @@ pub struct ErrorResponse {
     /// The request field that failed validation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub field: Option<String>,
+    /// Extra machine-readable context, for example `retryAfterSecs` on `429` responses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Option<Object>)]
     pub details: Option<BTreeMap<String, Value>>,

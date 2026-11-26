@@ -14,10 +14,17 @@ repository.workspace = true
 ts = ["dep:ts-rs"]
 
 [dependencies]
+# Timestamps on the wire are RFC 3339 strings (`DateTime<Utc>`), ids are UUID strings.
+chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-ts-rs = { workspace = true, optional = true, features = ["serde-json-impl"] }
-utoipa = { workspace = true }
+ts-rs = { workspace = true, optional = true, features = [
+  "chrono-impl",
+  "serde-json-impl",
+  "uuid-impl",
+] }
+utoipa = { workspace = true, features = ["chrono", "uuid"] }
+uuid = { workspace = true, features = ["serde"] }
 
 [lints]
 workspace = true

@@ -17,7 +17,11 @@ code?: string,
 /**
  * The request field that failed validation.
  */
-field?: string, details?: { [key in string]: JsonValue }, 
+field?: string, 
+/**
+ * Extra machine-readable context, for example `retryAfterSecs` on `429` responses.
+ */
+details?: { [key in string]: JsonValue }, 
 /**
  * Echo of the `X-Request-Id` header, for support and log correlation.
  */
