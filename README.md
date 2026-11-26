@@ -4,7 +4,7 @@ Reusable authentication and authorization for Rust applications built on axum, s
 
 ## Status
 
-**v0.1 in progress.** The domain, Postgres storage, crypto, HTTP routes, guard, and the `rustauth` facade are in place and tested (unit tests with in-memory fakes, route tests, and end-to-end tests against Postgres). Still to come before `v0.1.0`: the changelog, the upgrade test job, and the first release tag. Until then, pin a `rev`.
+**v0.1 in progress.** The domain, Postgres storage, crypto, HTTP routes, guard, the `rustauth` facade, the `@rustauth/contracts` TypeScript package, and the [integration guide](./docs/integration.md) are in place and tested (unit tests with in-memory fakes, route tests, end-to-end tests against Postgres, Zod tests on captured responses, and a scratch application that installs the package from git). Still to come before `v0.1.0`: the changelog, the upgrade test job, and the first release tag. Until then, pin a `rev`.
 
 ## What v0.1 Covers
 
@@ -21,7 +21,7 @@ Two-factor (TOTP), passkeys, SSO, email recovery, and fine-grained permissions a
 
 ## Quick Integration
 
-Pin a release tag (or a `rev` before the first tag):
+The [integration guide](./docs/integration.md) walks through every step: dependency, migrate order, router and guard, error mapping, `auth.users` references, configuration, tests, and the web client. In short, pin a release tag (or a `rev` before the first tag):
 
 ```toml
 [dependencies]
@@ -71,7 +71,11 @@ Your own tables may reference `auth.users (id)`, for example `user_id uuid NOT N
 
 For tests without a database, enable the `testing` feature and build on the in-memory fakes: `RustAuth::builder().ports(rustauth::testing::Fakes::new().ports())`.
 
-Web apps can install `@rustauth/contracts` (generated TypeScript types plus Zod schemas) from this repository.
+Web apps install `@rustauth/contracts` (generated TypeScript types, Zod schemas, route paths, error codes) from this repository at the same ref, and compile its TypeScript sources with their bundler:
+
+```sh
+pnpm add "@rustauth/contracts@github:host39/lib-rustauth#<commit-or-tag>&path:packages/contracts"
+```
 
 ## HTTP API
 
@@ -129,13 +133,13 @@ The example's tests (`cargo test -p example-server`) run the same application on
 | `crates/rustauth-postgres` | sqlx repositories and embedded migrations in the `auth` schema |
 | `crates/rustauth-contracts` | Request and response DTOs (serde, utoipa, optional ts-rs) |
 | `crates/rustauth-axum` | Router, guard layer, extractors, HTTP error mapping |
-| `packages/contracts` | npm package `@rustauth/contracts` |
+| `packages/contracts` | npm package `@rustauth/contracts`, installed from git |
 | `examples/server` | Minimal axum application that uses the facade |
-| `docs` | [Design](./docs/design/rustauth.md) and [ADRs](./docs/adr/README.md) |
+| `docs` | [Design](./docs/design/rustauth.md), [integration guide](./docs/integration.md), and [ADRs](./docs/adr/README.md) |
 
 ## Development
 
-Prerequisites: Rust stable (1.94 or newer), Node.js 22 with pnpm 10, and Docker for the local Postgres.
+Prerequisites: Rust stable (1.94 or newer), Node.js 22.18 or newer with pnpm 10 (the TypeScript tests run on Node's built-in type stripping), and Docker for the local Postgres.
 
 ```sh
 make install         # pnpm and Cargo dependencies
@@ -143,6 +147,7 @@ make check           # format, lint, type-check, test, boundaries
 pnpm db:start        # local Postgres 18 on port 5433
 make test-db         # tests that need Postgres, one throwaway database each (DATABASE_URL overrides)
 make contracts       # regenerate TypeScript bindings after changing a contract
+make package         # install @rustauth/contracts from git (HEAD) into a scratch app and type-check it
 ```
 
 `make help` lists every target. [AGENTS.md](./AGENTS.md) holds the project rules for people and coding assistants.

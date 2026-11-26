@@ -41,7 +41,7 @@ Run `make check` before considering work done. If a check needs infrastructure t
 | `crates/rustauth` | Facade: `RustAuth::builder()` (the composition root, with the startup schema check), `migrate`, curated re-exports; features `axum`, `postgres`, `testing`, `ts` |
 | `packages/contracts` | npm package `@rustauth/contracts`: generated TS types + Zod schemas |
 | `examples/server` | Minimal axum application that uses the facade (docs and smoke tests) |
-| `docs` | Design spec, ADRs |
+| `docs` | Design spec, integration guide, ADRs |
 
 ## Non-Negotiables
 
@@ -61,6 +61,7 @@ Run `make check` before considering work done. If a check needs infrastructure t
 ## Where to Look
 
 - Design spec: [docs/design/rustauth.md](./docs/design/rustauth.md)
+- Integration guide for applications (keep it in step with the facade and the package): [docs/integration.md](./docs/integration.md)
 - Architecture and storage decisions: [docs/adr/001-architecture.md](./docs/adr/001-architecture.md)
 - Dependency boundaries: [boundaries.config.mjs](./boundaries.config.mjs)
 

@@ -54,7 +54,7 @@
 //! - `testing`: in-memory fakes of every port ([`testing`]), for application tests.
 //! - `ts`: `ts_rs::TS` derives on the [`contracts`].
 //!
-//! See `README.md` for the integration guide and `docs/design/rustauth.md` for the design.
+//! See `docs/integration.md` for the integration guide and `docs/design/rustauth.md` for the design.
 
 mod builder;
 
