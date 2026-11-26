@@ -15,6 +15,7 @@ import {
   sessionListBodySchema,
   setupStatusBodySchema,
   signInBodySchema,
+  type UserRole,
   updateUserRequestSchema,
   userBodySchema,
   userListBodySchema,
@@ -210,6 +211,20 @@ test("roles are ordered from administrator down", () => {
   assert.equal(hasRole("user", "manager"), false);
   assert.equal(hasRole("manager", "administrator"), false);
   assert.equal(hasRole("user", "user"), true);
+});
+
+test("unknown roles fail closed", () => {
+  // A role from a newer server, or a value that never went through the response schemas,
+  // reads as `user`.
+  const owner = "owner" as UserRole;
+  const missing = undefined as unknown as UserRole;
+  assert.equal(hasRole(owner, "administrator"), false);
+  assert.equal(hasRole(owner, "manager"), false);
+  assert.equal(hasRole(owner, "user"), true);
+  assert.equal(hasRole(missing, "administrator"), false);
+  // An unknown minimum is never met.
+  assert.equal(hasRole("administrator", owner), false);
+  assert.equal(hasRole("administrator", missing), false);
 });
 
 test("routes encode ids", () => {

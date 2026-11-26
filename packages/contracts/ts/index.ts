@@ -91,12 +91,23 @@ export const USER_ROLES = [
   "user",
 ] as const satisfies readonly UserRole[];
 
+/** Position in {@link USER_ROLES} (0 is the highest), or -1 for a value that is not a known role. */
+function rank(role: unknown): number {
+  return USER_ROLES.indexOf(role as UserRole);
+}
+
 /**
  * Whether `role` is `minimum` or higher (`administrator > manager > user`), like the server's
  * `Principal::has_role`. For showing or hiding UI only: the server checks every request.
+ *
+ * Fails closed: a role it does not know (from a newer server, or a value that skipped the
+ * response schemas) reads as `user`, the lowest, and a `minimum` it does not know is never met.
  */
 export function hasRole(role: UserRole, minimum: UserRole): boolean {
-  return USER_ROLES.indexOf(role) <= USER_ROLES.indexOf(minimum);
+  const needed = rank(minimum);
+  if (needed === -1) return false;
+  const held = rank(role);
+  return (held === -1 ? USER_ROLES.length - 1 : held) <= needed;
 }
 
 /**
