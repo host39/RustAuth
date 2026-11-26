@@ -144,7 +144,12 @@ impl LoginGuard {
         now: DateTime<Utc>,
         since: DateTime<Utc>,
     ) -> AuthResult<AuthError> {
-        let lockout = self.users.record_failure(user.id, now, since).await?;
+        let lockout = match self.users.record_failure(user.id, now, since).await {
+            Ok(lockout) => lockout,
+            // Deleted since it was loaded: answer as for any unknown account.
+            Err(AuthError::NotFound { .. }) => return Ok(AuthError::InvalidCredentials),
+            Err(error) => return Err(error),
+        };
         tracing::warn!(
             user_id = %user.id,
             ip = ?client.ip(),
@@ -257,11 +262,32 @@ fn prune_unknown(unknown: &mut HashMap<String, Lockout>, now: DateTime<Utc>, sin
 mod tests {
     use super::*;
     use crate::testing::Fakes;
+    use crate::values::{DisplayName, Role, UserId, Username};
 
     fn guard(config: &AuthConfig) -> (Fakes, LoginGuard) {
         let fakes = Fakes::new();
         let guard = LoginGuard::new(fakes.store.clone(), fakes.clock.clone(), config);
         (fakes, guard)
+    }
+
+    #[tokio::test]
+    async fn a_deleted_account_fails_like_an_unknown_one() {
+        let (fakes, guard) = guard(&AuthConfig::default());
+        // Never stored, as if deleted after the sign-in loaded it.
+        let user = User {
+            id: UserId::generate(),
+            username: Username::new("gone").expect("valid"),
+            display_name: DisplayName::new("Gone").expect("valid"),
+            role: Role::User,
+            disabled_at: None,
+            created_at: fakes.clock.now(),
+            updated_at: fakes.clock.now(),
+            lockout: Lockout::default(),
+        };
+        let error = guard
+            .fail(&ClientInfo::default(), &Attempt::Known(&user))
+            .await;
+        assert!(matches!(error, AuthError::InvalidCredentials), "{error:?}");
     }
 
     #[test]

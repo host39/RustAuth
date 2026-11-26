@@ -12,9 +12,9 @@ pub struct FakeTokens {
 }
 
 impl FakeTokens {
-    /// How many tokens were issued. `AuthService::new` issues two (the generated setup token,
-    /// or a filler when one is configured, then the dummy password), so the first session gets
-    /// `token-3`.
+    /// How many tokens were issued. `AuthService::new` issues one for the dummy password, and
+    /// before it one more as the generated setup token when none is configured (so that token is
+    /// `token-1`).
     pub fn issued(&self) -> u64 {
         self.issued.load(Ordering::SeqCst)
     }
