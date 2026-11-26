@@ -11,13 +11,13 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
 use crate::config::AuthConfig;
-use crate::entities::{NewPassword, NewUser, User};
+use crate::entities::{NewPassword, NewUser, Principal, User};
 use crate::error::{AuthError, AuthResult};
 use crate::ports::{Clock, PasswordHasher, Ports, UserRepository};
-use crate::services::AuthService;
 use crate::services::fixture::{PASSWORD, SETUP, WRONG, client, client_at};
+use crate::services::{AdminService, AuthService, UserChanges};
 use crate::testing::{FakeHasher, Fakes};
-use crate::values::{DisplayName, Password, Role, UserId, Username};
+use crate::values::{Assurance, DisplayName, Password, Role, SessionId, UserId, Username};
 
 /// The fake hasher, but every `verify` waits for a permit the test hands out.
 #[derive(Debug)]
@@ -367,4 +367,90 @@ async fn input_that_is_no_username_never_shares_a_lockout_with_one() {
     // Only `kyle` was tracked by name; the invalid input left nothing behind.
     let later = fakes.clock.now() + chrono::TimeDelta::seconds(1);
     assert_eq!(fakes.store.prune(later).await.expect("ok"), 1);
+}
+
+#[tokio::test]
+async fn an_administrator_reset_during_the_check_withdraws_the_sign_in() {
+    let setup = setup(config()).await;
+    let admin = AdminService::new(Ports {
+        hasher: setup.gate.clone(),
+        ..setup.fakes.ports()
+    });
+    let victim = account(&setup.fakes, "victim").await;
+    // The attacker knows the old password; the sign-in is held at its check.
+    let logins = vec![("victim".to_owned(), PASSWORD, "203.0.113.7")];
+    let (mut running, _) = burst(&setup, logins).await;
+    // Meanwhile an administrator resets the password, which revokes every session.
+    let actor = principal(Role::Administrator);
+    let reset = Password::new("a brand new password".to_owned()).expect("valid");
+    admin
+        .update(&actor, victim.id, UserChanges::new().password(reset))
+        .await
+        .expect("reset");
+    setup.gate.allow(1);
+    let result = running
+        .join_next()
+        .await
+        .expect("one sign-in")
+        .expect("no panic");
+    assert!(
+        matches!(result, Err(AuthError::InvalidCredentials)),
+        "{result:?}"
+    );
+    assert!(setup.fakes.store.all_sessions().is_empty());
+}
+
+#[tokio::test]
+async fn a_sign_in_with_the_old_password_does_not_outlive_a_password_change() {
+    let setup = setup(config()).await;
+    let owner = account(&setup.fakes, "owner").await;
+    setup.gate.allow(1);
+    let signed = setup
+        .auth
+        .login("owner", PASSWORD.to_owned(), &client())
+        .await
+        .expect("signed in");
+    let current = setup
+        .auth
+        .verify(signed.token.expose())
+        .await
+        .expect("verified");
+    // The owner changes the password while an attacker signs in with the old one; both checks
+    // are held back, then run in either order.
+    let change = {
+        let auth = setup.auth.clone();
+        tokio::spawn(async move {
+            let new = Password::new("a brand new password".to_owned()).expect("valid");
+            auth.change_password(&current, PASSWORD.to_owned(), new, &client())
+                .await
+        })
+    };
+    let attacker = {
+        let auth = setup.auth.clone();
+        tokio::spawn(async move {
+            auth.login("owner", PASSWORD.to_owned(), &client_at("203.0.113.7"))
+                .await
+        })
+    };
+    let gate = setup.gate.clone();
+    settle(move || gate.started() == 3).await;
+    setup.gate.allow(2);
+    change.await.expect("no panic").expect("changed");
+    if let Ok(stolen) = attacker.await.expect("no panic") {
+        assert!(setup.auth.verify(stolen.token.expose()).await.is_err());
+    }
+    let sessions = setup.fakes.store.all_sessions();
+    assert_eq!(sessions.len(), 1, "only the owner's session is left");
+    assert_eq!(sessions[0].user_id, owner.id);
+    assert_eq!(sessions[0].id, signed.session.id);
+}
+
+fn principal(role: Role) -> Principal {
+    Principal {
+        user_id: UserId::generate(),
+        username: Username::new("someone").expect("valid"),
+        role,
+        session_id: SessionId::generate(),
+        assurance: Assurance::Aal1,
+    }
 }

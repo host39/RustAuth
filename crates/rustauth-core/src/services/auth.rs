@@ -117,7 +117,8 @@ impl AuthService {
     /// Signs in with a username and password. Unknown usernames verify against the dummy hash
     /// and fail with the same error, and locked accounts (or unknown usernames) are refused
     /// before the password is checked. A disabled account fails with `Forbidden` only after the
-    /// correct password.
+    /// correct password. A password changed or reset while the check ran fails it with
+    /// `InvalidCredentials`.
     pub async fn login(
         &self,
         username: &str,
@@ -150,7 +151,10 @@ impl AuthService {
             slot.keep();
             return Err(self.guard.fail(client, &subject, seen).await);
         }
-        let signed = match self.complete(&subject, user, client).await {
+        let signed = match self
+            .complete(&subject, user, credential.as_ref(), client)
+            .await
+        {
             // Deleted during the check: answer as for any unknown username.
             Err(AuthError::NotFound { .. }) => Err(AuthError::InvalidCredentials),
             other => other,
@@ -160,18 +164,52 @@ impl AuthService {
     }
 
     /// The rest of a sign-in after the correct password: clears the failures (a lock set during
-    /// the check wins), refuses a disabled account, and issues the session.
+    /// the check wins), refuses a disabled account, and issues the session, unless the verified
+    /// password was replaced in the meantime.
     async fn complete(
         &self,
         subject: &Subject,
         user: User,
+        verified: Option<&PasswordCredential>,
         client: &ClientInfo,
     ) -> AuthResult<SignedIn> {
         self.guard.succeed(subject).await?;
         if user.is_disabled() {
             return Err(AuthError::forbidden("This account is disabled."));
         }
-        self.start(user, client).await
+        let signed = self.start(user, client).await?;
+        self.confirm(&signed, verified).await?;
+        Ok(signed)
+    }
+
+    /// Withdraws a new session whose password was changed or reset while the sign-in checked
+    /// it: that change revoked the account's sessions before this one existed. The credential is
+    /// read after the session is stored, so a change that lands later revokes it itself, and no
+    /// sign-in with a replaced password keeps a session.
+    async fn confirm(
+        &self,
+        signed: &SignedIn,
+        verified: Option<&PasswordCredential>,
+    ) -> AuthResult<()> {
+        let current = self.ports.users.find(&signed.user.username).await?;
+        let unchanged = current.is_some_and(|(user, credential)| {
+            user.id == signed.user.id
+                && credential.as_ref().map(|stored| stored.hash.as_str())
+                    == verified.map(|stored| stored.hash.as_str())
+        });
+        if unchanged {
+            return Ok(());
+        }
+        self.ports
+            .sessions
+            .delete(signed.user.id, signed.session.id)
+            .await?;
+        tracing::info!(
+            user_id = %signed.user.id,
+            session_id = %signed.session.id,
+            "rustauth.login.superseded"
+        );
+        Err(AuthError::InvalidCredentials)
     }
 
     /// Fails an attempt that has no lockout of its own: it still costs the dummy check (so the

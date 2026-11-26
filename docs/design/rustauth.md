@@ -357,7 +357,7 @@ Validation: numbers are whole and at least 1; session lifetimes are at most 3650
 
 - Argon2id with the `argon2` 0.6 defaults (m = 19 MiB, t = 2, p = 1), run in `spawn_blocking` behind a semaphore (4 permits by default).
 - Tokens: 256 bits from the OS RNG; only the SHA-256 is stored; lookups are by hash.
-- Every admin change to a user and every password change revokes that user's sessions (password change keeps the current session).
+- Every admin change to a user and every password change revokes that user's sessions (password change keeps the current session). A sign-in that verified a password which was changed or reset while it ran re-reads the credential after storing its session and withdraws it (`rustauth.login.superseded`, answered `INVALID_CREDENTIALS`), so no session made with a replaced password survives the revocation.
 - Logs use dotted keys (`rustauth.login.failed`, `rustauth.setup.token-issued`) and never include passwords, tokens, or hashes.
 - No `unsafe`; Clippy denies `print_*` and `dbg!`.
 
