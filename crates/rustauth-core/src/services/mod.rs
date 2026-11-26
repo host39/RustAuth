@@ -4,6 +4,8 @@
 
 mod admin;
 mod auth;
+#[cfg(test)]
+mod fixture;
 mod guard;
 mod inputs;
 mod limiter;
