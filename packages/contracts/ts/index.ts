@@ -2,11 +2,15 @@
 // the source of truth: `make contracts` regenerates the types in `ts/generated/`, and each schema
 // below must satisfy its generated type, so drift fails `make type-check`.
 //
-// Internal imports use the `#generated/*` subpath import from package.json, so they resolve the
-// same way inside this repository and in applications that install the package from git.
+// The package ships TypeScript sources: applications compile them with their own bundler (see
+// `docs/integration.md`). Internal imports use the `#generated/*` subpath import from
+// package.json, so they resolve the same way inside this repository and in applications that
+// install the package from git. They are type-only, so bundlers never resolve them at run time.
 //
-// Request schemas repeat the server's input rules for form validation; the server stays the
-// authority and answers `400 VALIDATION_ERROR` with the failing `field`.
+// Request schemas repeat the server's input rules and messages for form validation; the server
+// stays the authority and answers `400 VALIDATION_ERROR` with the failing `field`. Response
+// schemas accept what a newer server may add within the same major version: unknown fields are
+// dropped, and an unknown role reads as `user`.
 
 import { z } from "zod";
 import type { ChangePasswordRequest } from "#generated/ChangePasswordRequest";
@@ -39,6 +43,7 @@ export type { UpdateUserRequest } from "#generated/UpdateUserRequest";
 export type { UserResponse } from "#generated/UserResponse";
 export type { UserRole } from "#generated/UserRole";
 
+/** Request header whose value error bodies echo as `requestId`. */
 export const REQUEST_ID_HEADER = "X-Request-Id";
 
 /** Routes relative to where the application mounts the auth router (for example `/api`). */
@@ -75,6 +80,9 @@ export const AUTH_ERROR_CODES = [
   "UNSUPPORTED_MEDIA_TYPE",
 ] as const;
 
+/** A code from {@link AUTH_ERROR_CODES}. `ErrorResponse.code` stays a `string`, since codes may grow. */
+export type AuthErrorCode = (typeof AUTH_ERROR_CODES)[number];
+
 /** Every role, from highest to lowest. */
 export const USER_ROLES = [
   "administrator",
@@ -82,19 +90,54 @@ export const USER_ROLES = [
   "user",
 ] as const satisfies readonly UserRole[];
 
+/**
+ * Seconds to wait before retrying, from `details.retryAfterSecs` of a `429` body
+ * (`RATE_LIMITED` or `ACCOUNT_LOCKED`). Browsers cannot read `Retry-After` across origins unless
+ * the server exposes it, so the body repeats it.
+ */
+export function retryAfterSecs(error: ErrorResponse): number | undefined {
+  const { retryAfterSecs: value } = error.details ?? {};
+  return typeof value === "number" && value >= 0 ? value : undefined;
+}
+
+const utf8 = new TextEncoder();
+const control = /\p{Cc}/u;
+
+/** Length in UTF-8 bytes, as the server measures passwords. */
+function bytes(value: string): number {
+  return utf8.encode(value).length;
+}
+
+/** Length in Unicode code points, as the server counts characters. */
+function chars(value: string): number {
+  return Array.from(value).length;
+}
+
 const timestamp = z.iso.datetime({ offset: true });
 
 /** 3 to 32 letters, digits, or underscores; surrounding whitespace is ignored. */
 const username = z
   .string()
   .trim()
-  .regex(/^[A-Za-z0-9_]{3,32}$/, "Use 3 to 32 letters, digits, or underscores.");
+  .refine(
+    (value) => chars(value) >= 3 && chars(value) <= 32,
+    "Username must be 3 to 32 characters long."
+  )
+  .regex(/^[A-Za-z0-9_]*$/, "Username may contain only letters, digits, and underscores.");
 
-/** 1 to 80 characters after trimming. */
-const displayName = z.string().trim().min(1).max(80);
+/** 1 to 80 characters after trimming, without control characters. */
+const displayName = z
+  .string()
+  .trim()
+  .min(1, "Display name is required.")
+  .refine((value) => chars(value) <= 80, "Display name must be at most 80 characters long.")
+  .refine((value) => !control.test(value), "Display name must not contain control characters.");
 
-/** At least 12 characters (the server counts at least 12 and at most 256 UTF-8 bytes). */
-const newPassword = z.string().min(12).max(256);
+/** 12 to 256 UTF-8 bytes. */
+const newPassword = z
+  .string()
+  .refine((value) => bytes(value) >= 12, "Password must be at least 12 characters long.")
+  .refine((value) => bytes(value) <= 256, "Password must be at most 256 bytes long.");
 
 export const errorResponseSchema = z.object({
   error: z.string(),
@@ -117,13 +160,19 @@ export function detailsResponseSchema<T extends z.ZodType>(data: T) {
   return z.object({ data });
 }
 
+/** A known role, for requests and forms. */
 export const userRoleSchema = z.enum(USER_ROLES) satisfies z.ZodType<UserRole>;
+
+/** A role in a response: a role added by a newer server reads as the lowest role, `user`. */
+const responseRole = z
+  .string()
+  .transform((value): UserRole => userRoleSchema.safeParse(value).data ?? "user");
 
 export const userResponseSchema = z.object({
   id: z.uuid(),
   username: z.string(),
   displayName: z.string(),
-  role: userRoleSchema,
+  role: responseRole,
   disabled: z.boolean(),
   lockedUntil: timestamp.optional(),
   createdAt: timestamp,

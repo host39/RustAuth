@@ -44,6 +44,9 @@ jobs:
       - name: Type check TypeScript
         run: pnpm type-check
 
+      - name: Run TypeScript tests
+        run: pnpm test
+
   rust:
     runs-on: ubuntu-latest
     timeout-minutes: 30

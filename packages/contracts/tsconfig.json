@@ -1,4 +1,16 @@
 {
   "extends": "../../tsconfig.json",
-  "include": ["ts/**/*"]
+  "compilerOptions": {
+    // Applications compile these sources with their own settings, so check them under the strict
+    // options web apps commonly enable.
+    "lib": ["ES2022", "DOM"],
+    "verbatimModuleSyntax": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noUncheckedIndexedAccess": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["ts/**/*", "test/**/*"]
 }

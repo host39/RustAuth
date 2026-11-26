@@ -4,22 +4,34 @@
   "description": "RustAuth HTTP contracts: TypeScript types generated from the Rust DTOs, plus Zod schemas.",
   "private": true,
   "license": "PolyForm-Noncommercial-1.0.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/host39/lib-rustauth.git",
+    "directory": "packages/contracts"
+  },
   "type": "module",
+  "sideEffects": false,
+  "files": [
+    "ts"
+  ],
   "exports": {
-    ".": "./ts/index.ts"
+    ".": "./ts/index.ts",
+    "./package.json": "./package.json"
   },
   "imports": {
     "#generated/*": "./ts/generated/*.ts"
   },
   "scripts": {
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "test": "node --test test/*.test.ts"
   },
-  "dependencies": {
-    "zod": "catalog:"
+  "peerDependencies": {
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@tsconfig/node22": "catalog:",
     "@types/node": "catalog:",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "zod": "catalog:"
   }
 }
