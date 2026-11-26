@@ -17,8 +17,9 @@ Run these yourself from the repo root to verify work:
 | `make check` | format + lint + type-check + test + boundaries |
 | `make ci` | lint + type-check + test + boundaries + contract drift + package check, without writes |
 | `make test-db` | Tests marked `#[ignore]` that need Postgres (`DATABASE_URL`, default the maintenance database `localhost:5433/postgres`; each test gets a throwaway database) |
+| `make test-upgrade` | Upgrade check (`scripts/check-upgrade.sh`): seeds the database `rustauth_upgrade` with the previous release tag, then migrates and checks it and runs `make test-db` with the current code (needs Postgres and the git tags) |
 
-Run `make check` before considering work done. If a check needs infrastructure that is not running (Postgres for `test-db`), say so instead of skipping it silently. Point `make test-db` at another server with `make test-db DATABASE_URL=postgres://.../postgres`.
+Run `make check` before considering work done. If a check needs infrastructure that is not running (Postgres for `test-db` and `test-upgrade`), say so instead of skipping it silently. Point `make test-db` at another server with `make test-db DATABASE_URL=postgres://.../postgres`.
 
 **User-only** (these start Docker or delete data): give the user the command instead of running it.
 
@@ -38,7 +39,7 @@ Run `make check` before considering work done. If a check needs infrastructure t
 | `crates/rustauth-postgres` | sqlx repositories and embedded migrations in the `auth` schema, tracked in `auth._sqlx_migrations` |
 | `crates/rustauth-contracts` | Request and response DTOs (serde + utoipa; `ts-rs` under the `ts` feature) |
 | `crates/rustauth-axum` | Router (`OpenApiRouter<S>` with its own state), guard layer, `AuthUser` extractors, client IP, `AuthError` to HTTP mapping; route tests in `tests/routes` |
-| `crates/rustauth` | Facade: `RustAuth::builder()` (the composition root, with the startup schema check), `migrate`, curated re-exports; features `axum`, `postgres`, `migrate`, `contracts`, `crypto`, `testing`, `ts` |
+| `crates/rustauth` | Facade: `RustAuth::builder()` (the composition root, with the startup schema check), `migrate`, curated re-exports; features `axum`, `postgres`, `migrate`, `contracts`, `crypto`, `testing`, `ts`; `examples/upgrade.rs` is the upgrade harness of CI, not an integration example |
 | `packages/contracts` | npm package `@rustauth/contracts`: generated TS types + Zod schemas |
 | `examples/server` | Minimal axum application that uses the facade (docs and smoke tests) |
 | `docs` | Design spec, integration guide, ADRs |
@@ -52,6 +53,7 @@ Run `make check` before considering work done. If a check needs infrastructure t
 - Services fail with `AuthError` variants that carry human-readable messages and stable codes. Only `Internal` uses a dotted key (`AuthError::internal("rustauth.users.insert.failed", error)`). HTTP mapping lives in `rustauth-axum`.
 - Compatibility: public enums that may grow are `#[non_exhaustive]`; configuration and inputs use builders or constructors; routes, JSON fields, and error codes are only added within a major version; removals go through `#[deprecated]` first. See "Upgrades and Compatibility" in the design.
 - Migrations: every table lives in the `auth` schema; use `text` plus `CHECK` instead of enum types; a migration is append-only once a release tag includes it; breaking schema changes ship as expand, then contract.
+- Releases: record every change under "Unreleased" in `CHANGELOG.md`, with upgrade notes for anything an application must do. The upgrade harness (`crates/rustauth/examples/upgrade.rs`) is a contract between releases: its `check` must keep reading what older releases' `seed` wrote.
 - Never log passwords, tokens, or hashes. Log with `tracing` macros and `rustauth.*` dotted keys; no `println!` / `eprintln!` / `dbg!` (Clippy denies them). Library crates never install a subscriber.
 - Dependency versions match the RustInit template (`axum` 0.8.9, `sqlx` 0.9.1, `utoipa` 6.0.0, `utoipa-axum` 0.3.0, `ts-rs` 12.0.1, `tokio` 1.48) so applications compile one copy of each crate. Crates enable only the features they use; the application picks the sqlx TLS backend. No `reqwest`: the library makes no outbound HTTP calls in v0.1.
 - After changing a contract struct, run `make contracts` and update the Zod schema in `packages/contracts/ts/index.ts` (it must `satisfies` the generated type). Internal TypeScript imports use the `#generated/*` subpath import, never `./` or `../`.

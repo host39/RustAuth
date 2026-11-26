@@ -52,5 +52,11 @@ tracing-subscriber = { workspace = true, features = ["fmt"] }
 # `#[derive(OpenApi)]` in the README example, which runs as a doctest.
 utoipa = { workspace = true }
 
+# The upgrade harness of CI (`scripts/check-upgrade.sh`), not an integration example: the
+# previous release tag runs its `seed`, the current code its `check`.
+[[example]]
+name = "upgrade"
+required-features = ["postgres"]
+
 [lints]
 workspace = true

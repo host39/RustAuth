@@ -369,7 +369,7 @@ Validation: numbers are whole and at least 1; session lifetimes are at most 3650
 - Postgres: `#[sqlx::test]` tests (ignored unless Postgres is available, `make test-db`) for the repositories, including two concurrent first registrations where exactly one becomes administrator.
 - Axum: route tests with `tower::ServiceExt::oneshot` against an in-memory service stack, and end-to-end tests against Postgres through the facade.
 - Applications: the facade's `testing` feature re-exports the in-memory fakes, so `RustAuth::builder().ports(Fakes::new().ports())` builds the real router and guard without a database.
-- CI: a slim lint job (`ubuntu-slim`) and a Rust plus Postgres job (`ubuntu-latest`).
+- CI: a slim lint job (`ubuntu-slim`), a Rust plus Postgres job (`ubuntu-latest`), and the upgrade job (`ubuntu-latest`, see [Upgrade Testing](#upgrade-testing)).
 
 ## Upgrades and Compatibility
 
@@ -414,5 +414,7 @@ The library is developed and released on its own schedule. New features (for exa
 
 ### Upgrade Testing
 
-- The library's CI has an upgrade job: it applies the migrations of the previous release tag, inserts sample data, upgrades to the current code, runs `migrate` again, and runs the Postgres test suite. (Active from the first tag on.)
+- The library's CI has an upgrade job (`make test-upgrade`, `scripts/check-upgrade.sh`): it checks out the previous release tag (`git describe --tags --abbrev=0`, leaving out tags on the commit itself) into a worktree, applies that release's migrations to a fresh database and inserts sample data through that release's code, upgrades to the current code, runs `migrate` again, checks the sample data, and runs the Postgres test suite against that database.
+- The sample data comes from the upgrade harness, `crates/rustauth/examples/upgrade.rs`. Its `seed` (run from the previous tag) writes accounts in every state (active, disabled, locked), sessions, the lockout of an unknown username, and rows of an application table that references `auth.users (id)`, and records them in a manifest. Its `check` (run from the current code) requires that the schema is current, the sessions still verify, every account signs in or is refused as before, and deleting an account still removes the application's rows. The harness's commands, variables, and manifest are a contract between releases: `check` keeps reading every manifest an older `seed` wrote.
+- Before the first release tag there is nothing to upgrade from: the job seeds and checks with the current code, so the harness the first tag ships is known to work, and passes with a notice.
 - A compatibility test keeps the documented integration example compiling against the facade.

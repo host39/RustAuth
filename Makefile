@@ -1,4 +1,4 @@
-.PHONY: help install update lint format type-check test test-db boundaries contracts package check ci example clean
+.PHONY: help install update lint format type-check test test-db test-upgrade boundaries contracts package check ci example clean
 
 .DEFAULT_GOAL := help
 
@@ -19,6 +19,7 @@ help:
 	@echo "  type-check  cargo check + tsc across the workspace"
 	@echo "  test        Rust and TypeScript unit tests"
 	@echo "  test-db     Tests that need Postgres (ignored by default; uses DATABASE_URL)"
+	@echo "  test-upgrade Seed with the previous release tag, then migrate and test with this code"
 	@echo "  boundaries  Enforce crate dependency rules"
 	@echo "  contracts   Regenerate TypeScript bindings from the Rust contracts"
 	@echo "  package     Install @rustauth/contracts from git (HEAD) into a scratch app and type-check it"
@@ -57,6 +58,10 @@ test:
 
 test-db:
 	DATABASE_URL=$(DATABASE_URL) cargo test --workspace --all-features -- --ignored
+
+# Needs Postgres and the git tags; recreates the database `rustauth_upgrade` on that server.
+test-upgrade:
+	DATABASE_URL=$(DATABASE_URL) bash scripts/check-upgrade.sh
 
 boundaries:
 	node scripts/boundaries.mjs

@@ -164,6 +164,7 @@ make install         # pnpm and Cargo dependencies
 make check           # format, lint, type-check, test, boundaries
 pnpm db:start        # local Postgres 18 on port 5433
 make test-db         # tests that need Postgres, one throwaway database each (DATABASE_URL overrides)
+make test-upgrade    # seed with the previous release tag, then migrate and test with this code
 make contracts       # regenerate TypeScript bindings after changing a contract
 make package         # install @rustauth/contracts from git (HEAD) into a scratch app and type-check it
 ```
