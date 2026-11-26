@@ -70,6 +70,7 @@ Run `make check` before considering work done. If a check needs infrastructure t
 | Kind | Location |
 | --- | --- |
 | Rules | `.ai/rules/*.md`, loaded by path through `.claude/rules/*.md` wrappers |
+| Skills | `.claude/skills/agent-workflows`: the owner's settings for multi-agent work (2 agents at a time, risk-based reviews, when a smaller model is allowed, smallest CI runners). Use it whenever you plan or run agents, reviews, or CI jobs |
 
 ## Project Rules
 
