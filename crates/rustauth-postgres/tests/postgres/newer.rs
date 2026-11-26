@@ -43,7 +43,7 @@ async fn reads_sessions_with_unknown_methods_and_assurance(pool: PgPool) {
     let user = create(&users, "alice", Role::User).await;
     let (token, hash) = fakes.tokens.issue();
     let mut newer = session(user.id, 1);
-    newer.token_hash = hash.clone();
+    newer.token_hash = hash;
     newer.expires_at = fakes.clock.now() + chrono::TimeDelta::days(1);
     sessions.insert(&newer).await.expect("inserted");
     sessions
