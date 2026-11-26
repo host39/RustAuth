@@ -13,8 +13,9 @@ Run these yourself from the repo root to verify work:
 | `make test` | `cargo test --workspace` + TypeScript tests |
 | `make boundaries` | Crate dependency rules in `boundaries.config.mjs` |
 | `make contracts` | Regenerates `packages/contracts/ts/generated/` after contract changes |
+| `make package` | Installs `@rustauth/contracts` from git (the committed HEAD) into a scratch app and type-checks it |
 | `make check` | format + lint + type-check + test + boundaries |
-| `make ci` | lint + type-check + test + boundaries + contract drift, without writes |
+| `make ci` | lint + type-check + test + boundaries + contract drift + package check, without writes |
 | `make test-db` | Tests marked `#[ignore]` that need Postgres (`DATABASE_URL`, default the maintenance database `localhost:5433/postgres`; each test gets a throwaway database) |
 
 Run `make check` before considering work done. If a check needs infrastructure that is not running (Postgres for `test-db`), say so instead of skipping it silently. Point `make test-db` at another server with `make test-db DATABASE_URL=postgres://.../postgres`.

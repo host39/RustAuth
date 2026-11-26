@@ -1,4 +1,4 @@
-.PHONY: help install update lint format type-check test test-db boundaries contracts check ci example clean
+.PHONY: help install update lint format type-check test test-db boundaries contracts package check ci example clean
 
 .DEFAULT_GOAL := help
 
@@ -21,8 +21,9 @@ help:
 	@echo "  test-db     Tests that need Postgres (ignored by default; uses DATABASE_URL)"
 	@echo "  boundaries  Enforce crate dependency rules"
 	@echo "  contracts   Regenerate TypeScript bindings from the Rust contracts"
+	@echo "  package     Install @rustauth/contracts from git (HEAD) into a scratch app and type-check it"
 	@echo "  check       format + lint + type-check + test + boundaries"
-	@echo "  ci          check without writes, plus contract drift"
+	@echo "  ci          check without writes, plus contract drift and the package check"
 	@echo "  example     Run the example server (uses EXAMPLE_DATABASE_URL)"
 	@echo "  clean       Wipe build output, dependencies, and the database volume"
 
@@ -64,9 +65,12 @@ contracts:
 	rm -rf $(CONTRACTS_TS)
 	cargo test -q -p rustauth-contracts --features ts export_bindings
 
+package:
+	bash scripts/check-package.sh
+
 check: format lint type-check test boundaries
 
-ci: lint type-check test boundaries contracts
+ci: lint type-check test boundaries contracts package
 	git diff --exit-code -- $(CONTRACTS_TS) || (echo "Run 'make contracts' and commit the result." && false)
 	@test -z "$$(git ls-files --others --exclude-standard -- $(CONTRACTS_TS))" || (echo "Untracked bindings: run 'make contracts' and commit." && false)
 

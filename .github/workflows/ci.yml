@@ -47,6 +47,9 @@ jobs:
       - name: Run TypeScript tests
         run: pnpm test
 
+      - name: Install the contracts package from git in a scratch app
+        run: bash scripts/check-package.sh
+
   rust:
     runs-on: ubuntu-latest
     timeout-minutes: 30
