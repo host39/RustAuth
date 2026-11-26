@@ -71,11 +71,13 @@ async fn reads_sessions_with_unknown_methods_and_assurance(pool: PgPool) {
     );
     assert_eq!(sessions.list(user.id).await.expect("listed").len(), 2);
 
-    let ports = Ports {
-        users: Arc::new(users),
-        sessions: Arc::new(sessions),
-        ..fakes.ports()
-    };
+    let ports = Ports::new(
+        Arc::new(users),
+        Arc::new(sessions),
+        fakes.hasher.clone(),
+        fakes.tokens.clone(),
+        fakes.clock.clone(),
+    );
     let config = AuthConfig::builder()
         .setup_token("a-long-enough-setup-token")
         .build()

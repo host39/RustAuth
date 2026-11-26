@@ -45,12 +45,12 @@ impl Fakes {
 
     /// The fakes as service ports. `store` serves as both repositories.
     pub fn ports(&self) -> Ports {
-        Ports {
-            users: self.store.clone(),
-            sessions: self.store.clone(),
-            hasher: self.hasher.clone(),
-            tokens: self.tokens.clone(),
-            clock: self.clock.clone(),
-        }
+        Ports::new(
+            self.store.clone(),
+            self.store.clone(),
+            self.hasher.clone(),
+            self.tokens.clone(),
+            self.clock.clone(),
+        )
     }
 }

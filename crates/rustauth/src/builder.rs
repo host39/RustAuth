@@ -238,11 +238,11 @@ async fn check_schema(pool: &sqlx::PgPool, allow_newer: bool) -> Result<(), Buil
 
 #[cfg(feature = "postgres")]
 fn postgres_ports(pool: sqlx::PgPool) -> Ports {
-    Ports {
-        users: Arc::new(rustauth_postgres::SqlxUserRepository::new(pool.clone())),
-        sessions: Arc::new(rustauth_postgres::SqlxSessionRepository::new(pool)),
-        hasher: Arc::new(rustauth_crypto::Argon2Hasher::new()),
-        tokens: Arc::new(rustauth_crypto::RandomTokens),
-        clock: Arc::new(rustauth_core::SystemClock),
-    }
+    Ports::new(
+        Arc::new(rustauth_postgres::SqlxUserRepository::new(pool.clone())),
+        Arc::new(rustauth_postgres::SqlxSessionRepository::new(pool)),
+        Arc::new(rustauth_crypto::Argon2Hasher::new()),
+        Arc::new(rustauth_crypto::RandomTokens),
+        Arc::new(rustauth_core::SystemClock),
+    )
 }

@@ -16,11 +16,13 @@ const SETUP_TOKEN: &str = "a-long-enough-setup-token";
 const PASSWORD: &str = "correct horse battery staple";
 
 fn ports(pool: &PgPool, fakes: &Fakes) -> Ports {
-    Ports {
-        users: Arc::new(SqlxUserRepository::new(pool.clone())),
-        sessions: Arc::new(SqlxSessionRepository::new(pool.clone())),
-        ..fakes.ports()
-    }
+    Ports::new(
+        Arc::new(SqlxUserRepository::new(pool.clone())),
+        Arc::new(SqlxSessionRepository::new(pool.clone())),
+        fakes.hasher.clone(),
+        fakes.tokens.clone(),
+        fakes.clock.clone(),
+    )
 }
 
 async fn services(pool: &PgPool, fakes: &Fakes) -> (AuthService, AdminService) {
