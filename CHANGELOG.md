@@ -6,7 +6,11 @@ Before `1.0`, a minor release may break. Every release lists its breaking change
 
 ## [Unreleased]
 
-The first release, planned as `v0.1.0`.
+Nothing yet.
+
+## [0.1.0] - 2026-11-27
+
+The first release.
 
 ### Added
 
@@ -114,4 +118,5 @@ Every table lives in the Postgres schema `auth`, which the migrations create. Th
 - Schema: expand only. Creates the `auth` schema with the two migrations listed above.
 - Applications that pinned a pre-release `rev`: the auth migrations were only ever added, never edited, so the migrate step brings the schema up to date (it adds `auth.login_failures` when missing). Rust names may have changed before the first tag; the integration guide shows the released ones.
 
-[Unreleased]: https://github.com/host39/lib-rustauth/commits/HEAD
+[Unreleased]: https://github.com/host39/lib-rustauth/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/host39/lib-rustauth/releases/tag/v0.1.0
