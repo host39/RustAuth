@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "RustAuth HTTP contracts: TypeScript types generated from the Rust DTOs, plus Zod schemas.",
   "private": true,
-  "license": "PolyForm-Noncommercial-1.0.0",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/host39/lib-rustauth.git",

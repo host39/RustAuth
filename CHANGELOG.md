@@ -12,6 +12,8 @@ Nothing yet.
 
 The first release.
 
+Licensed under MIT.
+
 ### Added
 
 #### Rust Library

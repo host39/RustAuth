@@ -173,4 +173,4 @@ make package         # install @rustauth/contracts from git (HEAD) into a scratc
 
 ## License
 
-[PolyForm Noncommercial 1.0.0](./LICENSE).
+[MIT](./LICENSE).

@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.94"
 publish = false
-license = "PolyForm-Noncommercial-1.0.0"
+license = "MIT"
 repository = "https://github.com/host39/lib-rustauth"
 
 [workspace.dependencies]
